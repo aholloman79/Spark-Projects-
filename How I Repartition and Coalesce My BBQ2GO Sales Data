@@ -1,0 +1,45 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+import random
+
+# I initialize the SparkSession so I can control the Spark application
+spark = SparkSession.builder \
+    .appName("BBQ2GO_RepartitionCoalesce_Demo") \
+    .getOrCreate()
+
+# I load my sales DataFrame, which by default has just a single partition
+df = spark.read \
+    .option("header", True) \
+    .option("inferSchema", True) \
+    .csv("/data/bbq2go/pos_sales_hourly.csv")
+
+# I check how many partitions I currently have so I know my starting point
+initial_partitions = df.rdd.getNumPartitions()
+print(f"I started with {initial_partitions} partition(s).")
+
+# I know I often filter by destination country, so I choose to repartition by that column
+# I also decide to bump the partition count up to 10 to increase parallelism
+df_repart = df.repartition(10, col("DEST_COUNTRY_NAME"))
+print("I repartitioned the DataFrame into 10 partitions by DEST_COUNTRY_NAME.")
+
+# I verify the new partition count to ensure my repartition call took effect
+post_repartitions = df_repart.rdd.getNumPartitions()
+print(f"Now I have {post_repartitions} partitions after repartitioning.")
+
+# I realize that when I write this out, I don’t want 10 small files,
+# so I coalesce down to 3 partitions to reduce overhead
+df_coalesced = df_repart.coalesce(3)
+print("I coalesced the repartitioned DataFrame into 3 partitions to optimize file output.")
+
+# I confirm the partition count again to ensure coalesce worked correctly
+final_partitions = df_coalesced.rdd.getNumPartitions()
+print(f"Finally, I have {final_partitions} partitions after coalescing.")
+
+# I perform a simple action to materialize the plan and trigger any shuffles
+sample = df_coalesced.limit(5).collect()
+print("I collected a small sample of 5 rows to verify the transformations at scale.")
+for row in sample:
+    print(row)
+
+# I shut down my Spark session when I'm done to free resources
+spark.stop()

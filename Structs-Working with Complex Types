@@ -1,0 +1,54 @@
+from pyspark.sql import SparkSession                                     # I import SparkSession to create and manage my Spark application
+from pyspark.sql.functions import struct, col                            # I import struct to build complex types and col to reference fields
+
+# 1. Initialize SparkSession for my BBQ2GO complex‑type demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_ComplexTypes_Demo") \
+    .getOrCreate()
+
+# 2. Create a sample DataFrame of BBQ2GO orders with basic columns
+data = [
+    (1001, "Brisket Sandwich",    2, 12.50),
+    (1002, "Loaded Brisket Fries",1,  9.25),
+    (1003, "Brisket Sandwich",    3, 12.50)
+]
+columns = ["order_id", "item", "quantity", "price"]
+df = spark.createDataFrame(data, columns)                                # I build a DataFrame of orders
+print("Original flat DataFrame:")
+df.show()
+
+# 3. Combine 'item' and 'price' into a single 'menu' struct column
+complexDF = df.select(
+    col("order_id"),
+    struct("item", "price").alias("menu"),                               # I group item and price into a struct named 'menu'
+    "quantity"
+)
+print("DataFrame with 'menu' as a struct of (item, price):")
+complexDF.show(truncate=False)
+
+# 4. Access the nested fields inside the struct
+#    a) Using dot notation
+complexDF.select(
+    "order_id",
+    "menu.item",                                                        # I extract the 'item' field from the 'menu' struct
+    "menu.price"
+).show()
+
+#    b) Using getField()
+complexDF.select(
+    "order_id",
+    col("menu").getField("item").alias("item_via_getField"),            # I demonstrate getField to access nested data
+    col("menu").getField("price").alias("price_via_getField")
+).show()
+
+# 5. Flatten the struct back into top‑level columns
+flattenedDF = complexDF.select(
+    "order_id",
+    "quantity",
+    "menu.*"                                                            # I expand all fields in 'menu' struct into separate columns
+)
+print("Flattened DataFrame by selecting menu.* :")
+flattenedDF.show()
+
+# 6. Stop Spark session now that complex‑type demo is complete
+spark.stop()                                                            # I shut down Spark to free resources

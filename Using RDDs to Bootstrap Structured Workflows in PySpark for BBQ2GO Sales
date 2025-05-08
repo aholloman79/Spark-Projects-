@@ -1,0 +1,29 @@
+from pyspark.sql import SparkSession, Row  # I import SparkSession to create the driver and Row to wrap Python objects
+
+# I start a SparkSession; even when using RDDs, SparkSession gives me access to sparkContext underneath
+spark = SparkSession.builder \
+    .appName("BBQ2GO_RDD_Example") \
+    .getOrCreate()
+
+# I take a simple Python list of sale amounts and wrap each value in a Row object
+# so that when I convert to a DataFrame, Spark assigns a default column name (_1)
+rdd = spark.sparkContext.parallelize([Row(15.99), Row(9.49), Row(12.75)])
+# - I use parallelize() to distribute this small list across worker partitions
+# - Wrapping in Row lets me preserve schema when moving to DataFrame
+
+# I convert the RDD of Row objects into a DataFrame for further Structured API operations
+df = rdd.toDF()
+# - toDF() infers a single column named "_1" from the Row schema
+# - Converting to DataFrame gives me access to DataFrame methods (filter, groupBy, etc.)
+
+# I rename the default column to "sale_amount" for clarity in downstream code
+df = df.withColumnRenamed("_1", "sale_amount")
+# - withColumnRenamed() is a simple way to make the schema self-explanatory
+
+# I show the contents to verify that my RDD-to-DataFrame conversion worked as expected
+df.show()
+# - show() is an action that triggers the computation and prints a sample of rows
+
+# Cleanup: I stop the SparkSession to free resources when I'm done
+spark.stop()
+# - stop() ensures that the application exits cleanly and releases cluster resources

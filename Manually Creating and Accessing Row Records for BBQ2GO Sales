@@ -1,0 +1,34 @@
+from pyspark.sql import SparkSession, Row  # I import SparkSession to manage Spark and Row to manually construct records
+
+# I start a SparkSession for BBQ2GO to track this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Create_And_Access_Rows") \
+    .getOrCreate()
+
+# I manually instantiate a Row with values matching the schema order: sale_id, item, quantity, is_member
+# - sale_id: unique identifier for the sale
+# - item: menu item sold
+# - quantity: number of units
+# - is_member: whether the buyer used a loyalty membership
+myRow = Row(201, "Brisket Sandwich", 2, True)
+# I choose this order because it will match the DataFrame schema I plan to use later
+
+# I access individual fields in the Row by position
+first_field = myRow[0]  # I retrieve sale_id at index 0
+item_field = myRow[1]   # I retrieve item at index 1
+qty_field = myRow[2]    # I retrieve quantity at index 2
+member_flag = myRow[3]  # I retrieve is_member flag at index 3
+
+print(f"Sale ID: {first_field}")       # I print to verify correct retrieval
+print(f"Item Sold: {item_field}")      # I print to verify correct retrieval
+print(f"Quantity: {qty_field}")        # I print to verify correct retrieval
+print(f"Membership Used: {member_flag}")  # I print to verify correct retrieval
+
+# I demonstrate appending this Row to an empty DataFrame by defining the matching schema
+schema = ["sale_id", "item", "quantity", "is_member"]
+df = spark.createDataFrame([myRow], schema)  # I create a DataFrame from the single Row with matching columns
+
+df.show()  # I display the DataFrame to confirm that myRow was correctly converted into a full record
+
+# I stop the SparkSession to release resources once done
+spark.stop()  # I cleanly shut down Spark when finished

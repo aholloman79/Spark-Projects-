@@ -1,0 +1,57 @@
+from pyspark.sql import SparkSession                                           # I import SparkSession to create and manage my Spark application
+from pyspark.sql.functions import (                                            # I import string functions to demonstrate on business plan text
+    col, initcap, lower, upper, lit, ltrim, rtrim, trim, lpad, rpad
+)
+
+# 1. Initialize SparkSession for my BBQ2GO business plan string transformations
+spark = SparkSession.builder \
+    .appName("BBQ2GO_BusinessPlan_StringOps") \
+    .getOrCreate()
+
+# 2. Create a DataFrame representing key sections of my BBQ2GO business plan
+data = [
+    ("Executive Summary Opportunity",),
+    ("1.0 Executive Summary",),
+    ("This business plan represents the opportunity to acquire the financial means...",),
+    ("1.1 Business Objectives",),
+    ("• To introduce a new fast-food indoor kiosk concept idea...",)
+]
+df = spark.createDataFrame(data, ["SectionText"])                            # I build a single-column DataFrame of plan snippets
+print("I loaded key business-plan sections into a DataFrame:")
+df.show(truncate=False)
+
+# 3. Capitalize each word in the section titles using initcap()
+df_initcap = df.select(
+    initcap(col("SectionText")).alias("InitCapText")                         # I apply initcap to standardize title casing
+)
+print("I applied initcap() to standardize title casing:")
+df_initcap.show(truncate=False)
+
+# 4. Convert all text to lowercase for case-insensitive comparisons
+df_lower = df.select(
+    lower(col("SectionText")).alias("LowerText")                             # I downcase everything to simplify searches
+)
+print("I applied lower() to prepare for case-insensitive matching:")
+df_lower.show(truncate=False)
+
+# 5. Trim extraneous whitespace around list items and titles
+#    I simulate padded text by adding spaces and then removing them
+df_trim = df.select(
+    ltrim(lit("  " + col("SectionText") + "  ")).alias("LeftTrimmed"),       # I remove leading spaces from a padded literal
+    rtrim(lit("  " + col("SectionText") + "  ")).alias("RightTrimmed"),      # I remove trailing spaces
+    trim(lit("  " + col("SectionText") + "  ")).alias("FullyTrimmed")        # I remove both leading and trailing spaces
+)
+print("I demonstrated ltrim(), rtrim(), and trim() on padded text:")
+df_trim.show(truncate=False)
+
+# 6. Pad the "1.0 Executive Summary" title to fixed widths for formatting
+title_df = df.filter(col("SectionText").startswith("1.0"))
+df_pad = title_df.select(
+    lpad(col("SectionText"), 30, " ").alias("LeftPadded"),                   # I left-pad to width 30
+    rpad(col("SectionText"), 40, " ").alias("RightPadded")                   # I right-pad to width 40
+)
+print("I applied lpad() and rpad() to the '1.0 Executive Summary' title:")
+df_pad.show(truncate=False)
+
+# 7. Shutdown Spark session now that my string operations are complete
+spark.stop()                                                                  # I stop Spark to free up cluster resources

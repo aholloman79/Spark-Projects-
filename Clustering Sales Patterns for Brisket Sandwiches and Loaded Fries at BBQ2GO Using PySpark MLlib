@@ -1,0 +1,93 @@
+from pyspark.sql import SparkSession                                  # I need SparkSession to work with DataFrames and MLlib
+from pyspark.sql.functions import date_format, col                     # I import date_format for extracting weekday, col for column refs
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType  
+                                                                     # I import types to define a strict schema
+from pyspark.ml.feature import StringIndexer, OneHotEncoder, VectorAssembler  
+                                                                     # I import transformers to convert categorical day-of-week into numeric features
+from pyspark.ml import Pipeline                                        # I import Pipeline to chain preprocessing steps
+from pyspark.ml.clustering import KMeans                               # I import KMeans for clustering sales patterns
+
+# I start Spark, naming the job and allocating memory for model training
+spark = (
+    SparkSession.builder
+      .appName("BBQ2GO_Brisket_and_Fries_Sales_Clustering")  # I name the application to locate it in Spark UI
+      .config("spark.executor.memory", "4g")                 # I allocate 4 GB per executor to handle ML workloads
+      .getOrCreate()
+)
+
+# I define a schema reflecting our CSV sales records for brisket sandwiches and loaded fries
+schema = StructType([
+    StructField("sale_id", StringType(), True),               # Unique identifier for each sale
+    StructField("sale_time", TimestampType(), True),          # Timestamp of the transaction
+    StructField("location", StringType(), True),              # Store location of the sale
+    StructField("item_name", StringType(), True),             # 'Brisket Sandwich' or 'Loaded Fries'
+    StructField("quantity", IntegerType(), True),             # Number of units sold in this transaction
+    StructField("unit_price", DoubleType(), True),            # Price per unit of the item
+    StructField("total_price", DoubleType(), True)            # Computed total = quantity * unit_price
+])
+
+# I load all 2024 sales CSVs for our two signature items into a DataFrame, enforcing the schema
+raw_sales = (
+    spark.read
+      .schema(schema)                                       # I enforce our predefined schema for consistency
+      .option("header", "true")                             # I use the first row as column names
+      .csv("s3a://bbq2go-data/sales/2024/{brisket,fries}_*.csv")  
+                                                           # I read brisket and fries CSVs together
+)
+
+# I fill any missing numeric fields with zero to avoid transformation errors
+sales_df = raw_sales.na.fill(0)
+
+# I extract the day of week from the sale_time to capture weekly sales patterns
+sales_df = sales_df.withColumn(
+    "day_of_week",
+    date_format(col("sale_time"), "EEEE")                   # I convert timestamp to full weekday name
+)
+
+# I split data into training (first half of year) and test (second half) by sale_time
+train_df = sales_df.where("sale_time < '2024-07-01'")
+test_df  = sales_df.where("sale_time >= '2024-07-01'")
+
+# I index the categorical day_of_week into numeric indices required by Spark ML
+indexer = StringIndexer()\
+    .setInputCol("day_of_week")\
+    .setOutputCol("day_of_week_index")
+
+# I one-hot encode the indices so weekdays don’t imply ordinal relationships
+encoder = OneHotEncoder()\
+    .setInputCol("day_of_week_index")\
+    .setOutputCol("day_of_week_vec")
+
+# I assemble unit_price, quantity, and day_of_week_vec into a single feature vector
+assembler = VectorAssembler()\
+    .setInputCols(["unit_price", "quantity", "day_of_week_vec"])\
+    .setOutputCol("features")
+
+# I chain indexing, encoding, and vector assembling into a single pipeline
+pipeline = Pipeline().setStages([indexer, encoder, assembler])
+
+# I fit the pipeline to training data so the indexer learns weekday categories
+fitted_pipeline = pipeline.fit(train_df)
+
+# I transform training and test sets, caching training results for reuse
+train_feat = fitted_pipeline.transform(train_df).cache()    # I cache because I'll train multiple models
+test_feat  = fitted_pipeline.transform(test_df)
+
+# I configure KMeans to find 5 clusters of sales behavior for our items
+kmeans = KMeans()\
+    .setK(5)\                                                # I choose 5 clusters to capture distinct sales patterns
+    .setSeed(42)                                             # I set a seed for reproducibility
+
+# I train the KMeans model on the featurized training data
+kmeans_model = kmeans.fit(train_feat)
+
+# I evaluate cluster compactness by computing within-cluster sum of squared errors on test data
+wssse = kmeans_model.computeCost(test_feat)
+print(f"Within-cluster SSE on test data = {wssse}")         # I output this metric to gauge model quality
+
+# I assign cluster predictions back to the test DataFrame for interpretation
+clustered = kmeans_model.transform(test_feat)
+
+# I display sample clustered sales, showing location, item, and cluster assignment
+clustered.select("location", "item_name", "prediction")\
+    .show(10, truncate=False)                              # I show 10 rows to inspect cluster distribution

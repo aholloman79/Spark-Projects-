@@ -1,0 +1,25 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+
+# I start a SparkSession for BBQ2GO and enable case-sensitive column resolution
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Case_Sensitivity_Demo") \
+    .config("spark.sql.caseSensitive", "true")  # I turn on case sensitivity so column names must match exactly
+    .getOrCreate()
+
+# I create a sample DataFrame with mixed‑case column names
+data = [(1, "Brisket"), (2, "Fries")]
+df = spark.createDataFrame(data, ["SaleID", "ItemName"])
+# - Columns are "SaleID" and "ItemName" (capitalized)
+
+# 1) Attempting to select with wrong case will fail under case-sensitive mode
+try:
+    df.select(col("saleid")).show()
+except Exception as e:
+    print(f"Error: {e}")  # I catch and print the error to illustrate strict name matching
+
+# 2) Correctly selecting with exact case works
+df.select(col("SaleID"), col("ItemName")).show()
+
+# I stop the SparkSession to release resources
+spark.stop()

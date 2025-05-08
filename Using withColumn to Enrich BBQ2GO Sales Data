@@ -1,0 +1,31 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import lit, expr
+
+# I start a SparkSession named for BBQ2GO so I can monitor this in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Adding_Columns_Demo") \
+    .getOrCreate()
+
+# I load our airport‐kiosk sales DataFrame with columns like 'terminal', 'item', 'quantity'
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# 1) Adding a constant column using withColumn:
+#    I use lit(1) to inject the literal integer 1 for every row
+df_one = df.withColumn("numberOne", lit(1))
+# I show two rows to verify the new 'numberOne' column appears with a value of 1
+df_one.show(2, truncate=False)
+
+# 2) Adding a Boolean flag column with a real expression:
+#    I flag orders where 'item' is the same as 'Loaded Fries' to isolate fries sales
+df_flag = df.withColumn("isFries", expr("item == 'Loaded Fries'"))
+# I show two rows to confirm that 'isFries' correctly marks fries orders as True/False
+df_flag.show(2, truncate=False)
+
+# 3) Renaming an existing column via withColumn:
+#    I duplicate 'total_price' into a new column called 'price'
+df_rename = df.withColumn("price", expr("total_price"))
+# I list the columns to ensure 'price' appears at the end alongside the originals
+print(df_rename.columns)
+
+# I stop the SparkSession to free resources when finished
+spark.stop()

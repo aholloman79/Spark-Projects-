@@ -1,0 +1,105 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, window, to_timestamp
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType
+
+# I initialize my SparkSession, naming the app so I can easily identify it in the Spark UI,
+# and I reduce shuffle partitions to 5 to keep local-mode testing fast and resource‑light.
+spark = (
+    SparkSession.builder
+      .appName("BBQ2GO_Streaming_Ingredients")  
+      .config("spark.sql.shuffle.partitions", "5")  
+      .getOrCreate()
+)
+
+# I define the static schema up front so that my streaming reader doesn’t waste time inferring types
+# on each micro-batch; this ensures consistency between static and streaming reads.
+static_schema = StructType([
+    StructField("InvoiceNo", StringType(), True),    # Unique invoice identifier
+    StructField("StockCode", StringType(), True),    # Product code
+    StructField("Description", StringType(), True),  # Item description
+    StructField("Quantity", IntegerType(), True),    # Number of units sold
+    StructField("InvoiceDate", StringType(), True),  # Timestamp of sale as string
+    StructField("UnitPrice", DoubleType(), True),    # Price per unit
+    StructField("CustomerID", StringType(), True),   # Customer identifier
+    StructField("Country", StringType(), True)       # Customer country
+])
+
+# --- STATIC DATA PROTOTYPING ---
+# I read the full set of daily CSV files as a static DataFrame to prototype my window logic.
+static_df = (
+    spark.read.format("csv")
+      .option("header", "true")      # Use the first line as column names
+      .option("inferSchema", "true") # Let Spark guess types for quick prototyping
+      .load("/data/retail-data/by-day/*.csv")
+)
+
+# I register the static DataFrame as a SQL view so I can validate results via spark.sql()
+static_df.createOrReplaceTempView("retail_data")
+
+# I demonstrate how to compute each customer’s total daily spend using a 1-day window.
+static_df \
+  .selectExpr(
+    "CustomerID", 
+    "(UnitPrice * Quantity) AS total_cost",  # I calculate total cost per record
+    "InvoiceDate"
+  ) \
+  .groupBy(
+    col("CustomerID"),
+    window(col("InvoiceDate"), "1 day")       # I group records into daily buckets
+  ) \
+  .sum("total_cost")                          # I aggregate the total_cost per customer per day
+  .show(5)                                    # I print a sample of results to verify correctness
+
+# --- STREAMING DATA PIPELINE ---
+# I switch to readStream, reusing the static schema to avoid runtime inference costs.
+# maxFilesPerTrigger=1 simulates one-day files arriving one at a time.
+streaming_df = (
+    spark.readStream
+      .schema(static_schema)                  # Enforce the same schema as static prototype
+      .option("maxFilesPerTrigger", 1)        # Process one file per micro-batch
+      .format("csv")
+      .option("header", "true")               # Consistent header handling
+      .load("/data/retail-data/by-day/*.csv") # Path to daily CSV files
+)
+
+# I assert that this DataFrame is streaming; spark.readStream always yields a streaming DF.
+assert streaming_df.isStreaming
+
+# I apply the identical windowed aggregation logic to the streaming DataFrame:
+purchase_by_customer = (
+    streaming_df
+      .selectExpr(
+        "CustomerID",
+        "(UnitPrice * Quantity) AS total_cost",  # I calculate the cost per event
+        "InvoiceDate"
+      )
+      .groupBy(
+        col("CustomerID"),
+        window(col("InvoiceDate"), "1 day")       # I rely on event time for accurate daily windows
+      )
+      .sum("total_cost")                          # I sum total_cost within each window and customer
+)
+
+# I write the streaming aggregation to an in-memory table so I can query it interactively.
+query = (
+    purchase_by_customer.writeStream
+      .format("memory")                          # Store results in memory for rapid debugging
+      .queryName("customer_purchases")           # Name the in-memory table for subsequent SQL queries
+      .outputMode("complete")                    # Emit the entire aggregated result each micro-batch
+      .start()                                   # Kick off the streaming query
+)
+
+# After starting the stream, I can run SQL against the in-memory table to see updated results.
+spark.sql("""
+    SELECT *
+    FROM customer_purchases
+    ORDER BY `sum(total_cost)` DESC
+""").show(5)  # I display the top spenders to verify the streaming aggregation is working
+
+# Optionally, I can also write the same stream to the console for live feedback during development.
+console_query = (
+    purchase_by_customer.writeStream
+      .format("console")                         # Direct output to stdout for quick visualization
+      .outputMode("complete")                    
+      .start()                                   
+)

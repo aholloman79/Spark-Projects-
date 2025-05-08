@@ -1,0 +1,42 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, expr
+
+# I start a SparkSession named for BBQ2GO so I can track this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Filter_Rows_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, which includes 'item', 'quantity', and 'total_price'
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# 1) Filtering with a column expression:
+#    I use where() with col() to keep only orders where quantity is less than 3
+small_orders = df.where(col("quantity") < 3)
+# I show two rows to verify that only small orders remain
+small_orders.show(2, truncate=False)
+
+# 2) Filtering with a string expression:
+#    I use where() with a SQL-style string to keep orders with total_price under $10
+cheap_orders = df.where("total_price < 10")
+# I show two rows to confirm filtering by string expression works
+cheap_orders.show(2, truncate=False)
+
+# 3) Chaining multiple filters sequentially:
+#    I first filter for small orders, then exclude those from terminal 'A'
+filtered_chain = df.where(col("quantity") < 3) \
+                   .where(col("terminal") != "A")
+# I show two rows to ensure both filters applied correctly
+filtered_chain.show(2, truncate=False)
+
+# 4) Equivalent SQL:
+#    I register the DataFrame as a temp view and run a SQL query with both conditions
+df.createOrReplaceTempView("salesTable")
+spark.sql("""
+    SELECT *
+    FROM salesTable
+    WHERE quantity < 3 AND terminal != 'A'
+    LIMIT 2
+""").show(truncate=False)
+
+# I stop the SparkSession to release resources when finished
+spark.stop()

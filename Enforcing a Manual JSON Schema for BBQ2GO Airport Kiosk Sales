@@ -1,0 +1,35 @@
+from pyspark.sql import SparkSession                         # I import SparkSession to initialize and manage all Spark operations
+from pyspark.sql.types import (                             
+    StructType, StructField, StringType, LongType, Metadata  
+)                                                           # I import the types I need to declare our manual schema
+
+# I start a SparkSession named for BBQ2GO so I can track this job in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_JSON_Schema_Enforcement") \
+    .getOrCreate()
+
+# I define a manual schema matching our airport‑kiosk sales JSON:
+# - 'sale_location' holds the terminal name
+# - 'item_sold' holds the BBQ2GO menu item
+# - 'quantity' is the number sold, forced non-nullable
+myManualSchema = StructType([
+    StructField("sale_location", StringType(), True),               
+    StructField("item_sold", StringType(), True),                   
+    StructField("quantity", LongType(), False,                     
+                metadata=Metadata({"source":"kiosk_system"}))       # I attach metadata to indicate data origin
+])
+
+# I read the JSON files using my explicit schema to avoid inference mistakes
+# and to ensure 'quantity' is always present (nulls will cause errors if missing)
+df = spark.read.format("json") \
+    .schema(myManualSchema)                                  # I enforce the manual schema for production‑grade ETL
+    .load("s3a://bbq2go-data/airport-sales/2024/*.json")     # I load all daily JSON logs from our airport kiosks
+
+# I print the enforced schema so I can verify column names, types, and metadata
+df.printSchema()                                            # I confirm Spark correctly applied my StructType definition
+
+# I show the first few rows to ensure data loaded properly under the manual schema
+df.show(5, truncate=False)                                  # I trigger an action to sample records and check parsing
+
+# I stop the session to free resources after schema demonstration
+spark.stop()                                                # I cleanly shut down Spark when done

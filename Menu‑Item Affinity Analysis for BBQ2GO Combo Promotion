@@ -1,0 +1,52 @@
+# menu_item_affinity.py
+
+from pyspark.sql import SparkSession                       # I import SparkSession to start and manage my Spark application
+from pyspark.ml.fpm import FPGrowth                        # I import FPGrowth for market‑basket analysis
+
+# 1. Initialize Spark session for BBQ2GO affinity analysis
+spark = SparkSession.builder \
+    .appName("BBQ2GO_MenuItemAffinity") \
+    .getOrCreate()
+
+# 2. Load POS transaction data, grouping items by order ID
+#    I assume a CSV with columns: order_id (String), item_id (String)
+transactions_df = (
+    spark.read
+         .option("header", True)                          # I use the CSV header to infer column names
+         .option("inferSchema", True)                     # I let Spark infer types for simplicity
+         .csv("/data/pos_transactions/*.csv")
+)
+
+# 3. Build “order → items” DataFrame: each row contains all items in a single order
+#    I group by order_id and collect list of item_ids
+order_items_df = (
+    transactions_df
+    .groupBy("order_id")                                  # I aggregate by each distinct order
+    .agg({"item_id": "collect_set"})                      # I collect unique items per order to avoid duplicates
+    .withColumnRenamed("collect_set(item_id)", "items")   # I rename the aggregated column to “items”
+)
+
+# 4. Configure the FP‑Growth algorithm
+fp_growth = FPGrowth(
+    itemsCol="items",                                     # I specify the column of item lists
+    minSupport=0.02,                                      # I require an itemset appears in ≥2% of orders
+    minConfidence=0.3                                     # I require rules have confidence ≥30%
+)
+
+# 5. Train the FP‑Growth model on our order‑items data
+model = fp_growth.fit(order_items_df)                     # I fit the model to identify frequent itemsets and rules
+
+# 6. Extract and display top association rules
+rules_df = model.associationRules                         # I retrieve DataFrame of “antecedent → consequent” rules
+#    I show the strongest rules by descending confidence
+rules_df.orderBy(rules_df.confidence.desc()).show(10, truncate=False)
+
+# 7. Save the rules for downstream combo promotion design
+rules_df.coalesce(1) \
+        .write \
+        .option("header", True) \
+        .mode("overwrite") \
+        .csv("/outputs/bbq2go_item_affinity_rules")
+
+# 8. Clean up Spark session
+spark.stop()                                              # I shut down Spark to free cluster resources

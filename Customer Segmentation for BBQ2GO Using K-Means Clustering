@@ -1,0 +1,86 @@
+# customer_segmentation.py
+
+from pyspark.sql import SparkSession                                        # I import SparkSession to initialize and manage the Spark application
+from pyspark.sql.functions import col, sum as spark_sum, countDistinct       # I import col for column refs, spark_sum to sum spend, countDistinct to count unique orders
+from pyspark.ml.feature import VectorAssembler, StandardScaler               # I import VectorAssembler to bundle features and StandardScaler to normalize them
+from pyspark.ml.clustering import KMeans                                     # I import KMeans for clustering customers
+from pyspark.ml import Pipeline                                              # I import Pipeline to chain preprocessing and modeling steps
+from pyspark.ml.evaluation import ClusteringEvaluator                        # I import ClusteringEvaluator to assess cluster quality
+
+# 1. Initialize Spark session for BBQ2GO customer segmentation
+spark = SparkSession.builder \
+    .appName("BBQ2GO_CustomerSegmentation") \                                # I name the session so I can identify it in the Spark UI
+    .getOrCreate()
+
+# 2. Load POS sales data containing customer IDs, order IDs, and spend amounts
+sales_df = (  
+    spark.read
+         .option("header", True)                                           # I tell Spark to use the first CSV row as column names
+         .option("inferSchema", True)                                      # I let Spark infer each column’s type automatically
+         .csv("/data/pos_sales_with_customers/*.csv")                     # I load all sales files into a single DataFrame
+)  # expected columns: customer_id, order_id, total_price
+
+# 3. Build customer profiles: total spend and visit frequency
+customer_profile_df = (
+    sales_df
+    .groupBy("customer_id")                                                # I group all transactions by each customer
+    .agg(
+        spark_sum("total_price").alias("total_spend"),                     # I sum up total_price to get lifetime spend per customer
+        countDistinct("order_id").alias("visit_count")                     # I count unique order IDs to get visit frequency
+    )
+    .withColumn("avg_basket", col("total_spend") / col("visit_count"))     # I calculate average spend per visit
+)
+
+# 4. Assemble behavioral metrics into a raw feature vector
+assembler = VectorAssembler(
+    inputCols=["total_spend", "visit_count", "avg_basket"],                # I select the metrics for clustering
+    outputCol="raw_features"                                               # I name the assembled column
+)
+profile_features_df = assembler.transform(customer_profile_df)             # I apply the assembler to get raw_features
+
+# 5. Standardize features to equalize scales
+scaler = StandardScaler(
+    inputCol="raw_features",                                              # I take the raw features as input
+    outputCol="features",                                                  # I output standardized features here
+    withMean=True,                                                         # I center the data to zero mean
+    withStd=True                                                           # I scale to unit variance
+)
+scaler_model = scaler.fit(profile_features_df)                            # I fit the scaler on the dataset
+profile_scaled_df = scaler_model.transform(profile_features_df)           # I produce the final features for clustering
+
+# 6. Configure K-Means to find 4 customer segments
+kmeans = KMeans(
+    featuresCol="features",                                                # I use the standardized features for clustering
+    predictionCol="segment",                                               # I name the output cluster column
+    k=4,                                                                   # I choose 4 clusters to capture major customer groups
+    seed=42                                                                # I set a seed so results are reproducible
+)
+
+# 7. Build and run the ML pipeline
+pipeline = Pipeline(stages=[kmeans])                                      # I wrap the KMeans stage into a pipeline
+model = pipeline.fit(profile_scaled_df)                                   # I train the clustering model on all customers
+
+# 8. Assign cluster labels to each customer
+segmented_df = model.transform(profile_scaled_df).select(
+    "customer_id", "total_spend", "visit_count", "avg_basket", "segment"   # I select relevant columns and the assigned segment
+)
+
+# 9. Evaluate clustering quality with silhouette score
+evaluator = ClusteringEvaluator(
+    featuresCol="features",                                                # I specify the feature column used
+    predictionCol="segment",                                               # I specify the segment predictions
+    metricName="silhouette",                                               # I choose silhouette as the evaluation metric
+    distanceMeasure="squaredEuclidean"                                     # I use squared Euclidean distance for silhouette
+)
+silhouette = evaluator.evaluate(segmented_df)                             # I compute the silhouette score for the clusters
+print(f"Silhouette with squared Euclidean distance = {silhouette:.2f}")    # I print the score to gauge cluster separation
+
+# 10. Persist segmented customer profiles for marketing use
+segmented_df.coalesce(1) \                                                # I coalesce to a single file for easier downstream consumption
+    .write \
+    .option("header", True) \
+    .mode("overwrite") \
+    .csv("/outputs/bbq2go_customer_segments")                             # I write the segments to CSV for campaign systems
+
+# 11. Stop Spark session to release resources
+spark.stop()                                                               # I shut down Spark once processing completes

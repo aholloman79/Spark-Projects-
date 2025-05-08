@@ -1,0 +1,20 @@
+from pyspark.sql import SparkSession  # I import SparkSession to create and manage Spark jobs
+
+# I launch a SparkSession named after BBQ2GO so I can track this job in the Spark UI
+spark = (
+    SparkSession.builder
+      .appName("BBQ2GO_Row_Objects_Demo")  # I label the session clearly for our restaurant context
+      .getOrCreate()
+)
+
+# I generate a small DataFrame with two sample sale identifiers (0 and 1)
+df = spark.range(2).toDF("sale_id")      # I create a DataFrame of type Row with one column 'sale_id'
+
+# I collect the DataFrame to the driver, which returns a list of Row objects
+rows = df.collect()                      # I use collect() to materialize all rows in Python as Row instances
+
+# I print the collected rows to verify their structure and contents
+print(rows)                              # I display Row objects like [Row(sale_id=0), Row(sale_id=1)]
+
+# I stop the SparkSession to free up resources when done
+spark.stop()                             # I cleanly shut down Spark after the demonstration

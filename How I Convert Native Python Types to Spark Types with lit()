@@ -1,0 +1,58 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import lit
+
+# I start my SparkSession so I can work with DataFrames and Spark types
+spark = SparkSession.builder \
+    .appName("BBQ2GO_ConvertToSparkTypes") \
+    .getOrCreate()
+
+# I load a small sample DataFrame to demonstrate literal conversion
+df = spark.createDataFrame(
+    [(1, "Brisket Sandwich"), (2, "Loaded Fries")],
+    ["id", "item"]
+)
+print("I’ve created a sample DataFrame with two columns: id and item.")
+df.show()
+
+# I use lit() to wrap an integer literal, converting it to a Spark Column of IntegerType
+int_lit_df = df.select(
+    "id",
+    "item",
+    lit(5).alias("int_lit")             # I introduce a constant integer column
+)
+print("I’ve added an integer literal column named int_lit with value 5.")
+int_lit_df.show()
+
+# I use lit() to wrap a string literal, converting it to a Spark Column of StringType
+str_lit_df = int_lit_df.select(
+    "id",
+    "item",
+    "int_lit",
+    lit("five").alias("str_lit")        # I introduce a constant string column
+)
+print("I’ve added a string literal column named str_lit with value 'five'.")
+str_lit_df.show()
+
+# I use lit() to wrap a floating‑point literal, converting it to Spark’s DoubleType
+float_lit_df = str_lit_df.select(
+    "id",
+    "item",
+    "int_lit",
+    "str_lit",
+    lit(5.0).alias("float_lit")         # I introduce a constant float column
+)
+print("I’ve added a float literal column named float_lit with value 5.0.")
+float_lit_df.show()
+
+# I combine multiple literal types in one select to demonstrate versatility
+combined_df = df.select(
+    lit(True).alias("bool_lit"),        # I add a Boolean literal column
+    lit(None).alias("null_lit"),        # I add a null literal column to show null handling
+    lit("BBQ2GO").alias("brand_lit"),    # I add another string literal for context
+    lit(42).alias("answer_lit"),        # I add the ultimate integer literal
+)
+print("I’ve created a DataFrame of various Spark literal types: Boolean, null, and multiple integers/strings.")
+combined_df.show()
+
+# I stop my Spark session when I’m done to free up resources
+spark.stop()

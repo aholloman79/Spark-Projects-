@@ -1,0 +1,47 @@
+from pyspark.sql import SparkSession, Row
+from pyspark.sql.functions import col
+
+# I start a SparkSession named for BBQ2GO so I can track this union demo in the UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Union_Rows_Demo") \
+    .getOrCreate()
+
+# I load our existing barbecue sales DataFrame with schema [item, quantity, total_price]
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# I capture the schema of the existing DataFrame to enforce consistency on new rows
+schema = df.schema
+
+# I manually create new sale records as Row objects matching the schema order:
+#   - A special promo sale of 2 Brisket Sandwiches
+#   - A one-off Loaded Fries sample
+new_rows = [
+    Row(item="Brisket Sandwich", quantity=2, total_price=25.98),
+    Row(item="Loaded Fries", quantity=1, total_price=5.49)
+]
+# I parallelize these new rows into an RDD so Spark can distribute them
+parallelized = spark.sparkContext.parallelize(new_rows)
+
+# I convert the RDD of Row objects into a DataFrame using the captured schema
+new_df = spark.createDataFrame(parallelized, schema)
+
+# I union the new DataFrame with the original to append the promo and sample rows
+combined_df = df.union(new_df)
+# - union() concatenates rows but requires identical schemas
+
+# I filter to show only these newly appended promo/sample rows by matching total_price
+combined_df.where(col("total_price") <= 5.49).show(truncate=False)
+# - I use where() to isolate the Loaded Fries sample (total_price=5.49) for verification
+
+# I register the combined DataFrame as a temporary view for downstream SQL queries
+combined_df.createOrReplaceTempView("allSales")
+
+# I run a SQL query to confirm the promo rows exist at the end of the unioned dataset
+spark.sql("""
+    SELECT item, quantity, total_price
+    FROM allSales
+    WHERE total_price IN (5.49, 25.98)
+""").show(truncate=False)
+
+# I stop the SparkSession to free resources once done
+spark.stop()

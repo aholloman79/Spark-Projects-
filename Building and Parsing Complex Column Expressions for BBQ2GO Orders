@@ -1,0 +1,37 @@
+from pyspark.sql import SparkSession               # I import SparkSession to launch and manage my Spark application
+from pyspark.sql.functions import col, expr        # I import `col` for column references and `expr` to parse SQL-like expressions
+
+# I start a SparkSession named for BBQ2GO so I can track this example in the UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Expression_Demo") \
+    .getOrCreate()
+
+# I create a sample DataFrame of two columns: 'sandwich_count' and 'fries_count'
+data = [(2, 5), (4, 3), (1, 8)]
+df = spark.createDataFrame(data, ["sandwich_count", "fries_count"])
+# - This simulates per-order counts of brisket sandwiches and loaded fries
+
+# 1. Using col() to build a complex expression step by step:
+#    ((sandwich_count + 1) * 100) < fries_count
+step_expr = ((col("sandwich_count") + 1) * 100) < col("fries_count")
+# - I add one free sandwich per order, multiply by 100 to scale for some reason, 
+#   then compare it to fries_count to flag orders with relatively more fries
+df_with_flag1 = df.select("sandwich_count", "fries_count", step_expr.alias("fries_dominant"))
+# - I alias the boolean result to 'fries_dominant' for clarity
+df_with_flag1.show()
+
+# 2. Achieving the same logic with expr() parsing the entire SQL-like string:
+#    "((sandwich_count + 1) * 100) < fries_count"
+parsed_expr = expr("((sandwich_count + 1) * 100) < fries_count")
+# - I pass the string expression into Spark’s Catalyst parser, which builds the same logical plan
+df_with_flag2 = df.select("sandwich_count", "fries_count", parsed_expr.alias("fries_dominant_expr"))
+# - I alias this column 'fries_dominant_expr' to distinguish it from the col()-based version
+df_with_flag2.show()
+
+# 3. Listing all columns programmatically to demonstrate DataFrame introspection
+all_columns = df.columns
+print(f"Columns in our BBQ2GO sales DataFrame: {all_columns}")
+# - I use the .columns property to retrieve column names for dynamic workflows
+
+# I stop Spark to release resources when I'm done
+spark.stop()

@@ -1,0 +1,22 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import expr, col
+
+# I start a Spark session (if I hadn't already)
+spark = SparkSession.builder.appName("EvenNumberFilter").getOrCreate()
+
+# I create my initial DataFrame of values from 0 through 99
+my_range = spark.range(0, 100).toDF("value")
+
+# I add a column 'is_even' that evaluates to True when the value is divisible by 2
+flagged = my_range.withColumn("is_even", expr("value % 2 = 0"))
+
+# I filter to keep only even numbers, based on my 'is_even' flag
+even_numbers = flagged.filter(col("is_even") == True)
+
+# I choose to rename 'value' to 'even_value' for readability, then sort ascending
+result = (even_numbers
+          .select(col("value").alias("even_value"))
+          .orderBy(col("even_value")))
+
+# I inspect the top results to make sure my transformation pipeline produced what I wanted
+result.show()

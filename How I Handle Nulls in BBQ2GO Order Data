@@ -1,0 +1,45 @@
+from pyspark.sql import SparkSession                                          # I import SparkSession to initialize and manage Spark
+from pyspark.sql.functions import coalesce, lit                                  # I import coalesce for null coalescing and lit to create literal nulls
+
+# 1. Initialize SparkSession for BBQ2GO null‑handling demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_NullsDemo") \
+    .getOrCreate()
+
+# 2. Create a sample DataFrame of BBQ2GO orders with some missing fields
+data = [
+    (1001, "Brisket Sandwich", 2, 12.50),
+    (1002, None,               1,  8.75),   # missing item description
+    (1003, "Loaded Brisket Fries", None, 9.25),  # missing quantity
+    (1004, None,               None, None) # entirely missing row
+]
+columns = ["order_id", "item", "quantity", "price"]
+df = spark.createDataFrame(data, columns)                                     # I build DataFrame with explicit nulls
+print("Sample orders with nulls:")
+df.show()
+
+# 3. Use coalesce() to fill a “display_item” column, preferring item name but falling back to “Unknown”
+df2 = df.withColumn(
+    "display_item",
+    coalesce(col("item"), lit("Unknown"))                                      # I choose the first non-null between item and a default
+)
+print("I created display_item by coalescing item with 'Unknown':")
+df2.select("order_id", "display_item").show()
+
+# 4. Drop any rows where both quantity and price are null (i.e., completely missing orders)
+df_dropped = df2.dropna(subset=["quantity", "price"], how="all")               # I drop rows only if all specified columns are null
+print("I dropped rows where both quantity and price are null:")
+df_dropped.show()
+
+# 5. Fill remaining null quantities with 1 (assume missing quantity means single order)
+df_filled = df_dropped.fillna({"quantity": 1})                                  # I fill null quantity with a sensible default of 1
+print("I filled null quantities with 1:")
+df_filled.show()
+
+# 6. Fill any null prices with the menu’s base price of $10.00
+df_final = df_filled.fillna({"price": 10.00})                                   # I fill null price with base price
+print("I filled null prices with base price $10.00:")
+df_final.show()
+
+# 7. Stop Spark session now that null‑handling demo is complete
+spark.stop()                                                                    # I shut down Spark to free resources

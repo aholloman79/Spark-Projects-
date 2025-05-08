@@ -1,0 +1,68 @@
+from pyspark.sql import SparkSession                                                      # I import SparkSession to initialize and manage Spark
+from pyspark.sql.functions import (                                                      # I import functions for date/timestamp operations
+    col, current_date, current_timestamp,
+    date_add, date_sub, datediff, months_between,
+    to_date, to_timestamp, lit
+)
+
+# 1. Initialize SparkSession for BBQ2GO date and timestamp demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_PurchaseDateOperations") \
+    .getOrCreate()
+
+# 2. Load a sample of customer purchases (brisket sandwiches & loaded fries) with timestamps
+#    I assume CSV with columns: order_id, customer_id, item, quantity, price, purchase_time (string)
+purchases_df = (
+    spark.read
+         .option("header", True)                                                        # I use first row as column names
+         .option("inferSchema", True)                                                   # I infer appropriate types
+         .csv("/data/bbq2go/purchases.csv")
+)
+print("Loaded purchase records with purchase_time as string:")
+purchases_df.printSchema()
+
+# 3. Add current_date() and current_timestamp() to track when we process data
+dated_df = purchases_df \
+    .withColumn("processing_date", current_date())                                     # I record today's date
+    .withColumn("processing_ts",   current_timestamp())                                # I record current timestamp
+dated_df.select("order_id", "purchase_time", "processing_date", "processing_ts") \
+    .show(3, False)
+
+# 4. Convert purchase_time string to DateType & TimestampType using a known format
+#    Format: "MM/dd/yyyy HH:mm:ss" (e.g., "05/22/2025 14:30:00")
+format_str = "MM/dd/yyyy HH:mm:ss"
+converted_df = dated_df \
+    .withColumn("purchase_date", to_date(col("purchase_time"), format_str))            # I parse date portion
+    .withColumn("purchase_ts",   to_timestamp(col("purchase_time"), format_str))       # I parse full timestamp
+converted_df.select("order_id", "purchase_time", "purchase_date", "purchase_ts") \
+    .show(3, False)
+
+# 5. Calculate booking window: days between processing and purchase
+window_df = converted_df \
+    .withColumn("days_since_purchase", datediff(col("processing_date"), col("purchase_date")))  # I compute days difference
+window_df.select("order_id", "purchase_date", "processing_date", "days_since_purchase") \
+    .show(3, False)
+
+# 6. Project future promotions eligibility: add and subtract 7 days
+promo_df = window_df \
+    .withColumn("promo_start", date_add(col("purchase_date"), 7))                      # I set promotion start one week later
+    .withColumn("promo_end",   date_sub(col("purchase_date"), 7))                      # I compute a retrospective 7-day window
+promo_df.select("order_id", "purchase_date", "promo_start", "promo_end") \
+    .show(3, False)
+
+# 7. Measure monthly customer cadence: months between first purchase and today
+#    I assume a `first_purchase_date` column exists
+#    For demo, cast purchase_date as first_purchase_date
+cadence_df = promo_df.withColumn("first_purchase_date", col("purchase_date")) \
+    .withColumn("months_since_first", months_between(col("processing_date"), col("first_purchase_date")))
+cadence_df.select("customer_id", "first_purchase_date", "processing_date", "months_since_first") \
+    .distinct() \
+    .show(3, False)
+
+# 8. Filter for orders older than 30 days
+old_orders = cadence_df.filter(col("days_since_purchase") > 30)                         # I identify stale orders for follow-up
+print("Orders placed more than 30 days ago:")
+old_orders.select("order_id", "purchase_date", "days_since_purchase").show(5, False)
+
+# 9. Stop Spark session now that date operations are complete
+spark.stop()                                                                            # I shut down Spark to free resources

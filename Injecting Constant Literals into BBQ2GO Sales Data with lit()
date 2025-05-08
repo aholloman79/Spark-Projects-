@@ -1,0 +1,27 @@
+from pyspark.sql import SparkSession                     # I import SparkSession to initialize and manage Spark
+from pyspark.sql.functions import expr, lit             # I import expr for SQL-like expressions and lit to inject constants
+
+# I start a SparkSession named for BBQ2GO so I can monitor this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Literals_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, which includes columns like 'item' and 'total_price'
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# I use select() with expr("*") to include all existing columns,
+# then inject a literal constant '1' as a new column named 'One'
+# - lit(1) wraps the Python integer 1 as a Spark literal expression
+df_with_one = df.select(expr("*"), lit(1).alias("One"))
+
+# I show the first two rows to verify that the constant column appears with value 1
+df_with_one.show(2, truncate=False)
+
+# I demonstrate injecting a string literal, e.g., labeling every record as 'BBQ2GO'
+df_labeled = df.select(expr("*"), lit("BBQ2GO").alias("brand"))
+
+# I show the first two rows to confirm the 'brand' column contains the string literal
+df_labeled.show(2, truncate=False)
+
+# I stop the SparkSession to release resources after the demonstration
+spark.stop()

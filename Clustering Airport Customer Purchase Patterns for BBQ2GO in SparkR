@@ -1,0 +1,96 @@
+# I load SparkR to access Spark capabilities within R
+library(SparkR)
+
+# I start a Spark session named for our airport-sales analysis
+sparkR.session(appName = "BBQ2GO_Airport_Customers")
+
+# I define the schema for our airport sales data so SparkR doesn’t infer on the fly
+schema <- structType(
+  structField("sale_id", "string"),
+  structField("sale_time", "timestamp"),
+  structField("terminal", "string"),
+  structField("item", "string"),         # 'Brisket Sandwich' or 'Loaded Fries'
+  structField("quantity", "integer"),
+  structField("unit_price", "double"),
+  structField("total_price", "double")
+)
+
+# I read all airport sales CSVs into a Spark DataFrame using my explicit schema
+salesDF <- read.df(
+  path = "s3a://bbq2go-data/airport-sales/2024/*.csv",
+  source = "csv",
+  schema = schema,
+  header = "true"
+)
+
+# I replace any missing numeric values with zero to avoid downstream errors
+salesDF <- na.fill(salesDF, 0)
+
+# I extract day of week from sale_time to capture weekly travel patterns
+salesDF <- withColumn(
+  salesDF,
+  "day_of_week",
+  date_format(salesDF$sale_time, "EEEE")
+)
+
+# I register the DataFrame as a temporary view for SQL queries
+createOrReplaceTempView(salesDF, "airport_sales")
+
+# I prototype clustering logic in SQL: compute average spend per passenger per weekday
+sqlAvgSpend <- sql("
+  SELECT day_of_week, AVG(total_price) AS avg_spend
+  FROM airport_sales
+  GROUP BY day_of_week
+  ORDER BY avg_spend DESC
+")
+head(sqlAvgSpend, 7)  # I display top weekdays by customer spend
+
+# I now perform the same grouping in DataFrame API for comparison
+dfAvgSpend <- salesDF %>%
+  groupBy("day_of_week") %>%
+  agg(avg(salesDF$total_price) %>% alias("avg_spend")) %>%
+  arrange(desc("avg_spend"))
+head(dfAvgSpend, 7)
+
+# I prepare data for clustering: index and one-hot encode day_of_week
+indexer <- StringIndexer(inputCol = "day_of_week", outputCol = "dow_index")
+encoder <- OneHotEncoder(inputCol = "dow_index", outputCol = "dow_vec")
+
+# I assemble features: unit_price, quantity, and encoded weekday
+assembler <- VectorAssembler(
+  inputCols = c("unit_price", "quantity", "dow_vec"),
+  outputCol = "features"
+)
+
+# I chain preprocessing steps into a pipeline
+pipeline <- sparkPipeline(stages = list(indexer, encoder, assembler))
+
+# I split into training (flights before July) and test sets
+trainDF <- filter(salesDF, salesDF$sale_time < "2024-07-01")
+testDF  <- filter(salesDF, salesDF$sale_time >= "2024-07-01")
+
+# I fit the pipeline on training data so transformers learn categories
+fittedPipe <- fit(pipeline, trainDF)
+
+# I transform both sets, caching the training set for reuse
+trainFeat <- cache(transform(fittedPipe, trainDF))
+testFeat  <- transform(fittedPipe, testDF)
+
+# I configure a KMeans model to find 5 purchase-pattern clusters
+kmeans <- spark.kmeans(centers = 5, featuresCol = "features", seed = 42)
+
+# I train the model on featurized training data
+kmeansModel <- fit(kmeans, trainFeat)
+
+# I evaluate clustering quality using within-cluster SSE on test data
+wssse <- summary(kmeansModel, testFeat)$trainingCost
+print(paste("Within-cluster SSE on test data =", wssse))
+
+# I assign each test record to a cluster for interpretation
+clusteredDF <- transform(kmeansModel, testFeat)
+
+# I show sample clustered purchases: terminal, item, and cluster
+head(select(clusteredDF, "terminal", "item", "prediction"), 10)
+
+# I stop Spark to release resources when done
+sparkR.session.stop()

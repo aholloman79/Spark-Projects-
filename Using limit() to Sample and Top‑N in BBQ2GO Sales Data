@@ -1,0 +1,32 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import expr
+
+# 1. Initialize Spark session for BBQ2GO limit demonstration
+spark = SparkSession.builder \
+    .appName("BBQ2GO_LimitDemo") \
+    .getOrCreate()
+
+# 2. Load our hourly sales DataFrame with columns: date, hour, hourly_revenue
+df = (
+    spark.read
+         .option("header", True)                     # I use the CSV header row for column names
+         .option("inferSchema", True)                # I let Spark infer each column’s data type
+         .csv("/data/pos_sales_hourly.csv")
+)
+
+# 3. Retrieve any 5 rows without ordering (arbitrary sample)
+df.limit(5)                                         # I limit the DataFrame to the first 5 rows Spark retrieves
+  .show()                                           # I display them to confirm the subset
+
+# 4. In SQL syntax, the equivalent would be: SELECT * FROM dfTable LIMIT 5
+
+# 5. To get the top 6 highest‑revenue hours, I first sort by descending revenue...
+top_revenue = df.orderBy(expr("hourly_revenue DESC"))  # I sort so highest revenue hours come first
+# 6. ...then limit to 6 rows
+top_revenue.limit(6)                                  # I take the top 6 rows from that sorted DataFrame
+  .show()                                             # I display the highest‑revenue hours
+
+# 7. In SQL syntax: SELECT * FROM dfTable ORDER BY hourly_revenue DESC LIMIT 6
+
+# 8. Stop Spark session after demonstration
+spark.stop()                                         # I shut down Spark to free up cluster or local resources

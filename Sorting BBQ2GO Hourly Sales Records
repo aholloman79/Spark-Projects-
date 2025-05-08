@@ -1,0 +1,47 @@
+from pyspark.sql import SparkSession                   # I import SparkSession to initialize and manage my Spark application
+from pyspark.sql.functions import col, desc, asc      # I import col for column references and desc/asc to specify sort direction
+
+# 1. Initialize Spark session for BBQ2GO sorting demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_SortingRowsDemo") \
+    .getOrCreate()
+
+# 2. Load hourly sales data for BBQ2GO airport kiosks
+df = (
+    spark.read
+         .option("header", True)                     # I use the first CSV row as column names
+         .option("inferSchema", True)                # I let Spark infer column types
+         .csv("/data/pos_sales_hourly.csv")          # Path to hourly sales: columns include date, hour, hourly_revenue
+)
+
+# 3. Simple ascending sort by revenue
+df.sort("hourly_revenue")                            # I sort rows so the smallest revenues appear first
+  .show(5)                                           # I display the top 5 to verify sorting
+
+# 4. Multi-column ascending sort by revenue then date
+df.orderBy("hourly_revenue", "date")                 # I sort first by revenue, then within equal revenues by date
+  .show(5)
+
+# 5. Column-expression sort using col()
+df.orderBy(col("hourly_revenue"), col("date"))       # I demonstrate using col() instead of strings
+  .show(5)
+
+# 6. Explicit descending revenue, ascending date
+df.orderBy(col("hourly_revenue").desc(), col("date").asc())  
+  # I put highest revenue first, and for ties, earliest date first
+  .show(5)
+
+# 7. SQL-style string expression sort
+df.orderBy(expr("hourly_revenue DESC, date ASC"))    # I show SQL-like sorting in a single string
+  .show(5)
+
+# 8. Sort within each partition by revenue for performance tuning
+spark.read \
+     .option("header", True) \
+     .option("inferSchema", True) \
+     .csv("/data/pos_sales_hourly.csv") \
+     .sortWithinPartitions("hourly_revenue")         # I sort data within each partition before further transformations
+  .show(5)
+
+# 9. Stop Spark session when done
+spark.stop()                                         # I shut down Spark to free up resources

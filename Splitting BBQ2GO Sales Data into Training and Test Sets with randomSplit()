@@ -1,0 +1,31 @@
+from pyspark.sql import SparkSession
+
+# I import SparkSession to initialize and manage my Spark application
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Random_Splits_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, which has thousands of records
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# I define a seed for reproducibility so the random split is consistent across runs
+seed = 42
+
+# I call randomSplit() with weights [0.3, 0.7] to split into 30% and 70% subsets
+# - The weights will be normalized if they don’t sum to 1, but here they do
+# - seed ensures the random assignment of rows to splits is repeatable
+train_df, test_df = df.randomSplit([0.3, 0.7], seed)
+
+# I count rows in each split to verify proportions roughly align with the specified weights
+train_count = train_df.count()    # Action triggers computation for the first split
+test_count = test_df.count()      # Action triggers computation for the second split
+print(f"Train split count: {train_count}, Test split count: {test_count}")
+
+# I show a few rows from each split to inspect their content
+print("Sample from train split:")
+train_df.show(5, truncate=False)  # I display 5 rows from training set
+print("Sample from test split:")
+test_df.show(5, truncate=False)   # I display 5 rows from test set
+
+# I stop the SparkSession to free resources once done
+spark.stop()  # I cleanly shut down Spark to release memory and cores

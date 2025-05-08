@@ -1,0 +1,29 @@
+from pyspark.sql import SparkSession                     # I import SparkSession to create and manage my Spark application
+from pyspark.sql.functions import col                    # I import `col` so I can explicitly reference DataFrame columns
+
+# I start a SparkSession named for BBQ2GO to track this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Column_References") \
+    .getOrCreate()
+
+# I create a sample DataFrame of BBQ2GO sales to demonstrate column references
+# Here, each row has a sale_id and a total_price for simplicity
+sample_sales = [(1, 12.99), (2, 8.49), (3, 15.75)]
+df = spark.createDataFrame(sample_sales, ["sale_id", "total_price"])
+# I choose to name columns explicitly so I can reference them clearly with `col`
+
+# I select the total_price column using col(), showing how I explicitly refer to a column by name
+price_df = df.select(col("total_price"))
+# I use col("total_price") to build a Catalyst expression pointing to that column
+
+# I apply an operation on the referenced column: add a $1.00 convenience fee to every sale
+adjusted_df = df.select((col("total_price") + 1.0).alias("price_with_fee"))
+# I alias the expression to give the new column a meaningful name
+
+# I show the results to verify that my column references and arithmetic worked correctly
+adjusted_df.show()
+# `show()` triggers the actual computation and prints sample rows
+
+# I stop SparkSession to release resources when finished
+spark.stop()
+# I cleanly shut down Spark to free up cluster or local-mode resources

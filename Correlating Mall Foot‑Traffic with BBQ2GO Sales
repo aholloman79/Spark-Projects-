@@ -1,0 +1,60 @@
+# foot_traffic_correlation.py
+
+from pyspark.sql import SparkSession                                       # I import SparkSession to initialize Spark
+from pyspark.sql.functions import window, sum as spark_sum, col            # I import window for time bucketing, sum for aggregation, and col for column refs
+
+# 1. Initialize Spark session for BBQ2GO foot‑traffic analysis
+spark = SparkSession.builder \
+    .appName("BBQ2GO_FootTrafficCorrelation") \
+    .getOrCreate()
+
+# 2. Ingest mall foot‑traffic counts (e.g., gate entries per 15 min)
+traffic_df = (
+    spark.read
+         .option("header", True)                                          # I use header row for column names
+         .option("inferSchema", True)                                     # I infer types automatically
+         .csv("/data/mall_traffic/gate_counts_15min.csv")                # Path to traffic sensor data
+    # expected columns: timestamp (Timestamp), gate_count (Int)
+)
+
+# 3. Aggregate traffic into 1‑hour windows to match sales granularity
+traffic_hourly = (
+    traffic_df
+    .groupBy(window(col("timestamp"), "1 hour"))                           # I bucket gate counts into hourly windows
+    .agg(spark_sum("gate_count").alias("hourly_traffic"))                  # I sum entries per hour
+    .select(col("window.start").alias("hour"), "hourly_traffic")           # I extract window start as 'hour'
+)
+
+# 4. Ingest sales data aggregated to 1‑hour intervals
+sales_df = (
+    spark.read
+         .option("header", True)
+         .option("inferSchema", True)
+         .csv("/data/pos_sales_hourly.csv")                               # Pre‑aggregated to hourly timestamps
+    # expected columns: hour (Timestamp), hourly_revenue (Double)
+)
+
+# 5. Join traffic with sales on the hourly timestamp
+joined_df = (
+    traffic_hourly
+    .join(sales_df, on="hour", how="inner")                               # I align traffic and sales by matching hours
+    .select("hour", "hourly_traffic", "hourly_revenue")                   # I keep only relevant columns
+)
+
+# 6. Compute Pearson correlation between foot traffic and revenue
+pearson_corr = joined_df.stat.corr("hourly_traffic", "hourly_revenue", method="pearson")
+print(f"Pearson correlation (traffic vs. sales): {pearson_corr:.2f}")
+
+# 7. Compute Spearman correlation to capture monotonic relationships
+spearman_corr = joined_df.stat.corr("hourly_traffic", "hourly_revenue", method="spearman")
+print(f"Spearman correlation (traffic vs. sales): {spearman_corr:.2f}")
+
+# 8. Optionally, write joined data with correlations for dashboarding
+joined_df.coalesce(1) \
+         .write \
+         .option("header", True) \
+         .mode("overwrite") \
+         .csv("/outputs/traffic_sales_correlation_data")
+
+# 9. Stop the Spark session when done
+spark.stop()                                                              # I shut down Spark to free resources

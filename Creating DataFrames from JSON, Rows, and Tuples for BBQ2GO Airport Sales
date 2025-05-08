@@ -1,0 +1,48 @@
+from pyspark.sql import SparkSession, Row                     # I import SparkSession to manage Spark and Row to manually construct records
+from pyspark.sql.types import StructType, StructField, StringType, LongType  
+                                                           # I import StructType and StructField to define schemas explicitly
+
+# I start a SparkSession named for BBQ2GO so I can monitor this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Create_DataFrames_Demo") \
+    .getOrCreate()
+
+# --- 1) Creating a DataFrame from JSON sales logs ---
+# I read all daily sales JSON files into a DataFrame, letting Spark infer schema from the data
+df = spark.read.format("json") \
+    .load("s3a://bbq2go-data/airport-sales/2024/*.json")
+# I register this DataFrame as a temporary view so I can run SQL queries against it
+df.createOrReplaceTempView("salesTable")
+
+# I show a sample of data to verify that the JSON files loaded correctly
+df.show(5, truncate=False)
+
+# --- 2) Creating a DataFrame from manually defined Rows and schema ---
+# I define a schema that matches my intended columns: terminal, item, quantity
+manual_schema = StructType([
+    StructField("terminal", StringType(), True),     # airport terminal identifier
+    StructField("item", StringType(), True),         # 'Brisket Sandwich' or 'Loaded Fries'
+    StructField("quantity", LongType(), False)       # number of items sold, non-nullable
+])
+
+# I manually create a Row with values matching the schema order
+manual_row = Row("A", "Brisket Sandwich", 3)        # sale of 3 sandwiches at terminal A
+
+# I convert the single Row into a DataFrame using my manual schema
+manual_df = spark.createDataFrame([manual_row], manual_schema)
+
+# I display the manually constructed DataFrame to confirm it aligns with my schema
+manual_df.show()
+
+# --- 3) Creating a DataFrame directly from Python tuples (shorthand) ---
+# I create a list of tuples matching desired columns and call createDataFrame with explicit column names
+inline_df = spark.createDataFrame(
+    [( "B", "Loaded Fries", 5 )],                 # sale of 5 fries at terminal B
+    ["terminal", "item", "quantity"]              # I name each column to match my data
+)
+
+# I show the inline DataFrame to verify correct column assignment
+inline_df.show()
+
+# I stop the SparkSession to release resources when finished
+spark.stop()                                        # I cleanly shut down Spark to free memory and cores

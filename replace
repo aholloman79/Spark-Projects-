@@ -1,0 +1,28 @@
+from pyspark.sql import SparkSession                                         # I import SparkSession to initialize and manage my Spark application
+
+# 1. Initialize SparkSession for my BBQ2GO replace demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_ReplaceValues_Demo") \
+    .getOrCreate()
+
+# 2. Create a sample DataFrame of BBQ2GO orders with empty and actual descriptions
+data = [
+    (1001, "Brisket Sandwich",    2, 12.50),
+    (1002, "",                    1,  8.75),  # empty description
+    (1003, "Loaded Brisket Fries", None, 9.25),
+    (1004, "",                    None, None)  # empty description and other nulls
+]
+columns = ["order_id", "item", "quantity", "price"]
+df = spark.createDataFrame(data, columns)                                    # I build DataFrame including empty strings
+print("Original DataFrame with empty descriptions:")
+df.show()
+
+# 3. Replace empty string values in the 'item' column with 'UNKNOWN ITEM'
+df_replaced = df.na.replace(
+    [""] , ["UNKNOWN ITEM"], "item"                                          # I target empty strings in 'item' and substitute with a meaningful default
+)
+print("After replacing empty 'item' values with 'UNKNOWN ITEM':")
+df_replaced.show()
+
+# 4. Stop Spark session now that replace demo is complete
+spark.stop()                                                                  # I shut down Spark to free resources

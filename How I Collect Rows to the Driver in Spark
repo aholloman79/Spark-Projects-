@@ -1,0 +1,45 @@
+from pyspark.sql import SparkSession
+
+# I initialize SparkSession so I can manage my Spark application and collect data when needed
+spark = SparkSession.builder \
+    .appName("BBQ2GO_CollectRowsDemo") \
+    .getOrCreate()
+
+# I load my hourly sales DataFrame for BBQ2GO airport kiosks
+df = (
+    spark.read
+         .option("header", True)                     # I interpret the first CSV line as column names
+         .option("inferSchema", True)                # I let Spark infer data types automatically
+         .csv("/data/bbq2go/pos_sales_hourly.csv")   # Path to my pre-aggregated hourly sales data
+)
+
+# I limit the DataFrame to 10 rows because I only need a small sample on the driver
+collectDF = df.limit(10)
+print("I created a small DataFrame with 10 rows using limit().")
+
+# I take the first 5 rows to bring them to the driver as a list of Row objects
+first_five = collectDF.take(5)
+print(f"I used take(5) and retrieved {len(first_five)} rows to the driver.")
+for row in first_five:
+    print(row)
+
+# I show all 10 rows in a nicely formatted table in the console
+print("I called show() to print all 10 rows:")
+collectDF.show()
+
+# I explicitly show 5 rows without truncation to see full column values
+print("I called show(5, False) to display 5 rows without truncating any columns:")
+collectDF.show(5, False)
+
+# I collect all 10 rows into a list on the driver for local iteration
+all_rows = collectDF.collect()
+print(f"I collected all {len(all_rows)} rows into a Python list on the driver.")
+
+# I use toLocalIterator() to iterate partition-by-partition, conserving some memory
+print("I iterate over rows using toLocalIterator():")
+for idx, row in enumerate(collectDF.toLocalIterator()):
+    print(f"Row {idx + 1}: {row}")
+
+# WARNING: Collecting large DataFrames can crash the driver—use sparingly!
+# I stop my Spark session to free up resources once I'm done collecting
+spark.stop()

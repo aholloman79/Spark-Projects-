@@ -1,0 +1,75 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
+from pyspark.sql.functions import col, sum as sum_, to_timestamp
+
+# I start by launching my SparkSession and tuning shuffle partitions and executor memory
+spark = (
+    SparkSession.builder
+    .appName("BBQ2GO_Ingredient_Cost_Analysis")     # I name the job so I can identify it in the Spark UI
+    .config("spark.sql.shuffle.partitions", "5")    # I reduce shuffle partitions for faster testing on our cluster
+    .config("spark.executor.memory", "6g")          # I allocate 6 GB per executor to handle large data
+    .getOrCreate()
+)
+
+# I define an explicit schema so Spark doesn't waste time inferring types on millions of rows
+schema = StructType([
+    StructField("order_id", StringType(), True),        # Unique identifier for each order
+    StructField("order_time", StringType(), True),      # Raw timestamp as string
+    StructField("location", StringType(), True),        # Store location or region
+    StructField("ingredient_name", StringType(), True), # Name of the ingredient used
+    StructField("quantity_used", IntegerType(), True),  # How many units of the ingredient
+    StructField("unit_cost", DoubleType(), True),       # Cost per unit of ingredient
+    StructField("total_cost", DoubleType(), True)       # Computed cost (quantity × unit_cost)
+])
+
+# I read all CSV files in the ingredients directory as a single DataFrame
+raw_ingredients = (
+    spark.read
+    .schema(schema)                  # Enforce my predefined schema for consistency and speed
+    .option("header", "true")        # Use the first row of each file as column names
+    .csv("s3a://bbq2go-data/ingredients/2024/*.csv")  # Path to all monthly CSVs
+)
+
+# I convert the order_time column from string to a TimestampType for time-based analyses
+ingredients = raw_ingredients.withColumn(
+    "order_time",
+    to_timestamp(col("order_time"), "yyyy-MM-dd HH:mm:ss")  # Specify the timestamp format
+)
+
+# I sanity-check my load by sampling 500 rows to confirm schema and parsing are correct
+sample_count = ingredients.limit(500).count()
+print(f"Sampled {sample_count} ingredient records successfully.")
+
+# I filter to keep only our high-cost “star” ingredients to focus analysis and reduce data volume
+star_ingredients = ingredients.filter(
+    col("ingredient_name").isin("Brisket", "Premium Bacon")
+)
+
+# I sort the filtered DataFrame by total_cost in descending order to find our priciest orders
+top_star_orders = star_ingredients.orderBy(col("total_cost").desc()).limit(50)
+
+# I write the top 50 star-ingredient orders to Parquet so dashboards can consume them directly
+top_star_orders.write.mode("overwrite").parquet(
+    "s3a://bbq2go-outputs/top_star_ingredient_orders.parquet"
+)
+
+# I repartition by location before grouping to balance the wide shuffle across executors
+cost_by_location = (
+    ingredients
+    .repartition(5, "location")                         # Distribute data by location for grouping
+    .groupBy("location")                                # Group records by store location
+    .agg(sum_("total_cost").alias("total_location_cost"))  # Sum total cost per location
+    .orderBy(col("total_location_cost").desc())         # Sort locations by highest spend
+)
+
+# I persist the aggregated costs by location as Parquet for efficient downstream queries
+cost_by_location.write.mode("overwrite").parquet(
+    "s3a://bbq2go-outputs/ingredient_cost_by_location.parquet"
+)
+
+# I inspect the physical execution plan to see how Spark will perform the groupBy and shuffle
+cost_by_location.explain()
+
+# Finally, I trigger a full count to report how many records I processed in total
+total_records = ingredients.count()
+print(f"Processed a total of {total_records} ingredient records for BBQ2GO.")

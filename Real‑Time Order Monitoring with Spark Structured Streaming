@@ -1,0 +1,87 @@
+# real_time_order_monitoring.py
+
+from pyspark.sql import SparkSession                                         # I import SparkSession to initialize Spark
+from pyspark.sql.functions import window, count, avg                         # I import functions to compute aggregates
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType  
+                                                                               # I import types to parse incoming JSON
+
+# 1. Initialize Spark session for structured streaming
+spark = SparkSession.builder \
+    .appName("BBQ2GO_RealTimeOrderMonitoring") \
+    .getOrCreate()
+
+# 2. Define schema for incoming POS transactions
+schema = StructType([
+    StructField("order_id", StringType(), True),                             # order identifier
+    StructField("item_id",  StringType(), True),                             # menu item sold
+    StructField("quantity", IntegerType(), True),                            # quantity ordered
+    StructField("price",    DoubleType(), True),                             # price per unit
+    StructField("timestamp",StringType(), True)                              # event time as string
+])
+
+# 3. Read streaming data from Kafka topic "pos_transactions"
+raw_stream = (
+    spark.readStream
+         .format("kafka")                                                    # I specify Kafka as source
+         .option("kafka.bootstrap.servers", "broker1:9092,broker2:9092")     # Kafka bootstrap servers
+         .option("subscribe", "pos_transactions")                            # Topic with POS events
+         .option("startingOffsets", "latest")                                # Start from new messages
+         .load()
+)
+
+# 4. Parse Kafka value (JSON) into structured columns
+orders_stream = (
+    raw_stream.selectExpr("CAST(value AS STRING) as json_str")               # I extract JSON string from Kafka record
+              .selectExpr("from_json(json_str, {}) as data".format(schema.simpleString()))  
+                                                                               # I parse JSON according to schema
+              .select("data.*")                                             # I flatten struct to columns
+              .withColumn("event_time", col("timestamp").cast("timestamp")) # I cast timestamp string to proper type
+)
+
+# 5. Compute streaming metrics over 1‑minute tumbling windows
+metrics = (
+    orders_stream
+    .withWatermark("event_time", "2 minutes")                                # I handle late data up to 2 minutes
+    .groupBy(window(col("event_time"), "1 minute"))                          # I define 1‑minute windows
+    .agg(
+        count("order_id").alias("orders_per_minute"),                        # orders/sec approximated per minute
+        avg(col("price") * col("quantity")).alias("avg_check"),              # average check size
+    )
+)
+
+# 6. Compute top items per window
+top_items = (
+    orders_stream
+    .withWatermark("event_time", "2 minutes")
+    .groupBy(window(col("event_time"), "1 minute"), col("item_id"))
+    .agg(count("*").alias("item_count"))
+    .withColumn("rank", dense_rank().over(
+        Window.partitionBy("window").orderBy(col("item_count").desc())
+    ))
+    .filter(col("rank") <= 5)                                                # I keep top 5 items
+    .select("window", "item_id", "item_count")
+)
+
+# 7. Write metrics to console for real-time dashboarding (replace with WebSocket sink)
+query_metrics = (
+    metrics.writeStream
+           .outputMode("update")                                            # I update aggregates each trigger
+           .format("console")                                               # I print to console; swap to WebSocket in prod
+           .option("truncate", False)
+           .start()
+)
+
+query_top_items = (
+    top_items.writeStream
+             .outputMode("complete")                                        # I output full top‑n set each trigger
+             .format("console")
+             .option("truncate", False)
+             .start()
+)
+
+# 8. Await termination to keep streaming alive
+query_metrics.awaitTermination()
+query_top_items.awaitTermination()
+
+# 9. Stop Spark session when streaming ends
+spark.stop()                                                                 # I shut down Spark to free resources

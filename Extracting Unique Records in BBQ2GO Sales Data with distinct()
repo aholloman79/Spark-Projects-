@@ -1,0 +1,26 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+
+# I start a SparkSession named for BBQ2GO so I can monitor this in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Distinct_Rows_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, which includes 'terminal', 'item', and 'quantity'
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# 1) Counting distinct terminal–item pairs:
+#    I select 'terminal' and 'item', then call distinct() to remove duplicates,
+#    and count() to get the total number of unique combinations
+unique_term_item_count = df.select("terminal", "item").distinct().count()
+print(f"Unique terminal–item combinations: {unique_term_item_count}")
+# - This tells me how many different menu items were sold at each terminal combination
+
+# 2) Counting distinct terminals:
+#    I select only 'terminal', apply distinct(), and then count()
+unique_terminals = df.select("terminal").distinct().count()
+print(f"Unique terminals: {unique_terminals}")
+# - This reveals how many different airport terminals hosted BBQ2GO kiosks
+
+# I stop the SparkSession to release resources when finished
+spark.stop()

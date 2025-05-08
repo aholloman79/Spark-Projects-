@@ -1,0 +1,33 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+
+# I start a SparkSession named for BBQ2GO so I can track this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Cast_Column_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, which has a 'quantity' column read as StringType
+# (perhaps due to inconsistent JSON formatting)
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# 1) Casting the 'quantity' column from StringType to LongType:
+#    I create a new column 'quantity_long' by casting 'quantity' to long
+df_cast = df.withColumn("quantity_long", col("quantity").cast("long"))
+# - withColumn() adds or replaces a column; cast("long") converts the data type
+# - I choose LongType to safely handle large sale counts
+
+# I show two rows to verify that 'quantity_long' is now a numeric type with correct values
+df_cast.select("quantity", "quantity_long").show(2)
+
+# 2) In a SQL expression, the equivalent would be:
+#    SELECT *, cast(quantity AS long) AS quantity_long FROM dfTable
+#    Here, I register a temp view and run that SQL to illustrate parity
+df.createOrReplaceTempView("salesTable")
+spark.sql("""
+    SELECT *, CAST(quantity AS long) AS quantity_long
+    FROM salesTable
+    LIMIT 2
+""").show(truncate=False)
+
+# I stop the SparkSession to free resources when finished
+spark.stop()

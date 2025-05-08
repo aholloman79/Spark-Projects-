@@ -1,0 +1,105 @@
+# review_sentiment_analysis.py
+
+from pyspark.sql import SparkSession                                    # I import SparkSession to initialize Spark
+from pyspark.sql.functions import col, weekofyear                        # I import functions to bucket by week
+from sparknlp.base import DocumentAssembler, Finisher                    # I import Spark NLP components for preprocessing
+from sparknlp.annotator import Tokenizer, Lemmatizer, StopWordsCleaner,                                   # I import NLP annotators
+    Normalizer, TfIdfTransformer, SentimentDLModel
+from pyspark.ml import Pipeline                                           # I import Pipeline to chain steps
+
+# 1. Initialize Spark session with Spark NLP
+spark = SparkSession.builder \
+    .appName("BBQ2GO_ReviewSentimentAnalysis") \
+    .config("spark.jars.packages", "JohnSnowLabs:spark-nlp:3.4.4") \
+    .getOrCreate()
+
+# 2. Ingest review data: text and numeric rating
+#    I assume CSV with columns: review_id, menu_item, review_text, rating (1–5)
+reviews_df = (
+    spark.read
+         .option("header", True)                                        # I use header for column names
+         .option("inferSchema", True)                                   # I let Spark infer data types
+         .csv("/data/reviews/*.csv")
+)
+
+# 3. DocumentAssembler: convert raw text into Spark NLP documents
+document_assembler = DocumentAssembler() \
+    .setInputCol("review_text")                                         # I take raw review_text
+    .setOutputCol("document")                                           # I output annotated documents
+
+# 4. Sentence detection and tokenization aren’t needed for single sentences; I tokenize directly
+tokenizer = Tokenizer() \
+    .setInputCols(["document"])                                         # I tokenize the document
+    .setOutputCol("token")
+
+# 5. Normalize tokens: lowercase and remove punctuation
+normalizer = Normalizer() \
+    .setInputCols(["token"])                                            # I normalize tokens
+    .setOutputCol("normalized")
+
+# 6. Remove stop words to focus on meaningful terms
+stopwords_cleaner = StopWordsCleaner() \
+    .setInputCols(["normalized"])                                       # I clean out common stop words
+    .setOutputCol("cleanTokens")
+
+# 7. Lemmatize tokens to their root form
+lemmatizer = Lemmatizer() \
+    .setInputCols(["cleanTokens"])                                      # I reduce tokens to lemmas
+    .setOutputCol("lemma")
+
+# 8. Compute TF-IDF features from lemmas
+tfidf = TfIdfTransformer() \
+    .setInputCols(["lemma"])                                            # I use lemmas for term frequencies
+    .setOutputCol("tfidfFeatures")
+
+# 9. Load pre-trained DL sentiment model (Spark NLP)
+sentiment_model = SentimentDLModel.pretrained("sentimentdl_use_twitter", "en") \
+    .setInputCols(["document", "lemma"])                                # I feed both document and lemmas
+    .setOutputCol("sentiment")
+
+# 10. Build and run the NLP + sentiment pipeline
+nlp_pipeline = Pipeline(stages=[
+    document_assembler,
+    tokenizer,
+    normalizer,
+    stopwords_cleaner,
+    lemmatizer,
+    tfidf,
+    sentiment_model
+])
+nlp_model = nlp_pipeline.fit(reviews_df)                                # I fit pipeline (pretrained model has no training)
+processed_df = nlp_model.transform(reviews_df)                           # I get sentiment annotations
+
+# 11. Convert Spark NLP sentiment output into numeric score  (positive=1, negative=0)
+#     I finish the annotation to extract sentiment result strings
+from sparknlp.base import Finisher
+finisher = Finisher() \
+    .setInputCols(["sentiment"])                                        # I convert annotations to plain string
+finished_df = finisher.transform(processed_df)                           # I get sentiment labels
+
+# 12. Map sentiment labels to numeric scores
+sentiment_numeric_df = finished_df.withColumn(
+    "sentiment_score",
+    when(col("finished_sentiment")[0] == "positive", 1).otherwise(0)     # I map 'positive' to 1, else 0
+)
+
+# 13. Aggregate by week and menu item to compute average sentiment and review count
+weekly_sentiment = sentiment_numeric_df.groupBy(
+    weekofyear(col("date")).alias("week"),
+    col("menu_item")
+).agg(
+    spark_sum("sentiment_score").alias("positive_count"),              # I sum positive flags
+    countDistinct("review_id").alias("total_reviews")                  # I count total reviews
+).withColumn(
+    "avg_sentiment", col("positive_count") / col("total_reviews")      # I compute average sentiment per menu item per week
+)
+
+# 14. Persist weekly sentiment metrics for dashboarding
+weekly_sentiment.coalesce(1) \
+    .write \
+    .option("header", True) \
+    .mode("overwrite") \
+    .csv("/outputs/bbq2go_weekly_sentiment")
+
+# 15. Stop Spark session to release resources
+spark.stop()                                                             # I shut down Spark when processing is done

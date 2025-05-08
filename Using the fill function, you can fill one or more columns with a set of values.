@@ -1,0 +1,37 @@
+from pyspark.sql import SparkSession                                            # I import SparkSession to initialize and manage my Spark application
+
+# 1. Initialize SparkSession for my BBQ2GO null‑fill demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_NullFill_Demo") \
+    .getOrCreate()
+
+# 2. Create a sample DataFrame of BBQ2GO orders with some null fields
+data = [
+    (1001, "Brisket Sandwich",    2,   12.50),
+    (1002, None,                   1,    8.75),  # missing item description
+    (1003, "Loaded Brisket Fries", None,  9.25),  # missing quantity
+    (1004, None,                   None, None)    # entirely missing row
+]
+columns = ["order_id", "item", "quantity", "price"]
+df = spark.createDataFrame(data, columns)                                       # I build DataFrame with explicit nulls
+print("Original DataFrame with nulls:")
+df.show()
+
+# 3. Globally fill all null string columns with a default message
+df_fill_string = df.na.fill("Unknown Item")                                     # I replace any null strings with "Unknown Item"
+print("After filling null strings with 'Unknown Item':")
+df_fill_string.show()
+
+# 4. Globally fill all null integer columns with a default quantity of 1
+df_fill_int = df.na.fill(1)                                                     # I replace any null integers with 1
+print("After filling null integers with 1:")
+df_fill_int.show()
+
+# 5. Fill specific columns with different values using a dictionary
+fill_cols_vals = {"item": "No Description", "quantity": 1}                       # I define column-specific default values
+df_fill_map = df.na.fill(fill_cols_vals)                                         # I apply the map to fill nulls per column
+print("After filling nulls by column map (item -> 'No Description', quantity -> 1):")
+df_fill_map.show()
+
+# 6. Stop Spark session now that null‑fill demo is complete
+spark.stop()                                                                     # I shut down Spark to free resources

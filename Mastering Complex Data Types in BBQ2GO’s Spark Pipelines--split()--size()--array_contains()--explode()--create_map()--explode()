@@ -1,0 +1,70 @@
+from pyspark.sql import SparkSession                                          # I import SparkSession to initialize and manage my Spark application
+from pyspark.sql.functions import split, explode, size, array_contains, create_map, col, lit  # I import functions to work with arrays and maps
+
+# 1. Initialize SparkSession for my BBQ2GO complex‑type demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_ComplexTypes_Demo") \
+    .getOrCreate()
+
+# 2. Create a sample DataFrame of BBQ2GO menu descriptions
+data = [
+    (1, "Brisket Sandwich with Pickles"),
+    (2, "Loaded Brisket Fries and Cheese"),
+    (3, "Brisket Sandwich and Fries Combo")
+]
+columns = ["item_id", "description"]
+df = spark.createDataFrame(data, columns)                                   # I build a DataFrame of menu item descriptions
+print("Original menu descriptions:")
+df.show(truncate=False)
+
+# 3. Split descriptions into arrays of words
+df_words = df.withColumn(
+    "words", split(col("description"), " ")                                  # I split each description on spaces into an array
+)
+print("After splitting description into 'words' array:")
+df_words.select("item_id", "words").show(truncate=False)
+
+# 4. Determine the number of words per description
+df_word_counts = df_words.withColumn(
+    "word_count", size(col("words"))                                         # I compute the array length for each row
+)
+print("Word counts per description:")
+df_word_counts.select("item_id", "word_count").show()
+
+# 5. Check if the word 'Brisket' appears in each description
+df_brisket_flag = df_words.withColumn(
+    "has_brisket", array_contains(col("words"), "Brisket")                   # I flag rows containing the word 'Brisket'
+)
+print("Flagging descriptions that contain 'Brisket':")
+df_brisket_flag.select("item_id", "has_brisket").show()
+
+# 6. Explode the words array into one row per word
+df_exploded = df_words.withColumn(
+    "word", explode(col("words"))                                            # I transform the array into individual rows
+)
+print("After exploding words into separate rows:")
+df_exploded.select("item_id", "word").show(truncate=False)
+
+# 7. Create a map of description → item_id for quick lookup
+df_map = df.select(
+    create_map(col("description"), col("item_id")).alias("desc_map")         # I build a map from full description to its ID
+)
+print("Map of description to item_id:")
+df_map.show(truncate=False)
+
+# 8. Query the map for a specific description key
+df_map_lookup = df_map.selectExpr(
+    "desc_map['Loaded Brisket Fries and Cheese'] AS lookup_id"               # I retrieve item_id for that exact description
+)
+print("Lookup item_id for a specific description key:")
+df_map_lookup.show()
+
+# 9. Explode the map into key/value pairs as separate rows
+df_map_exploded = df_map.selectExpr(
+    "explode(desc_map) AS (description, item_id)"                            # I convert the map into columns for each entry
+)
+print("Exploded map into rows of (description, item_id):")
+df_map_exploded.show(truncate=False)
+
+# 10. Stop Spark session now that complex‑type demo is complete
+spark.stop()                                                                 # I shut down Spark to free resources

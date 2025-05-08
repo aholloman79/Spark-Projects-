@@ -1,0 +1,24 @@
+from pyspark.sql import SparkSession  # I import SparkSession to initialize and manage my Spark application
+
+# I start a SparkSession for BBQ2GO to track this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Remove_Columns_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, which includes columns like 'terminal', 'item', 'quantity', 'total_price'
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# 1) Removing a single column using drop():
+#    I remove 'quantity' since I only need revenue-level analysis for this step
+df_removed_one = df.drop("quantity")
+# I list the remaining columns to verify 'quantity' has been dropped
+print("After dropping 'quantity':", df_removed_one.columns)
+
+# 2) Removing multiple columns in one call:
+#    I drop both 'item' and 'total_price' to focus solely on terminal-level metrics
+df_removed_multiple = df.drop("item", "total_price")
+# I list the remaining columns to confirm both have been removed
+print("After dropping 'item' and 'total_price':", df_removed_multiple.columns)
+
+# I stop the SparkSession to release resources when finished
+spark.stop()

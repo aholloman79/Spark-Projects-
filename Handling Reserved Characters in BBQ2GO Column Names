@@ -1,0 +1,46 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import expr, col
+
+# I start a SparkSession named for BBQ2GO to track this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Reserved_Chars_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, which has standard column names
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# 1) Using withColumn to add a new column with spaces and a dash in its name
+#    I use a simple string for the new name, so no escaping is required here
+df_with_long = df.withColumn(
+    "This Long Column-Name",        # I choose a column name containing spaces and a dash
+    expr("terminal")                # I populate it by copying the existing 'terminal' column
+)
+
+# I show two rows to verify that my new column appears with the intended name
+df_with_long.show(2, truncate=False)
+
+# 2) Selecting and aliasing that column using backticks to escape reserved characters
+#    I must wrap names with backticks in expr calls so Spark parses them correctly
+df_with_long.selectExpr(
+    "`This Long Column-Name`",      # I reference the original long name with backticks
+    "`This Long Column-Name` as `new col`"  # I alias it to another name with a space
+).show(2, truncate=False)
+
+# 3) Registering the DataFrame as a SQL view to show SQL escaping
+df_with_long.createOrReplaceTempView("longNamesTable")
+
+spark.sql("""
+    SELECT `This Long Column-Name`, `This Long Column-Name` AS `new col`
+    FROM longNamesTable
+    LIMIT 2
+""").show(truncate=False)
+
+# 4) Demonstrating alternate column references without escaping in select()
+#    When I use col(), Spark treats the string literally and no backticks are needed
+print(df_with_long.select(col("This Long Column-Name")).columns)
+
+#    Similarly, expr with explicit backticks works equivalently for expressions
+print(df_with_long.select(expr("`This Long Column-Name`")).columns)
+
+# I stop the SparkSession to release resources when finished
+spark.stop()

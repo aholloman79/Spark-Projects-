@@ -1,0 +1,54 @@
+from pyspark.sql import SparkSession  
+from pyspark.sql.functions import (
+    col, get_json_object, json_tuple, to_json, from_json
+)
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+
+# 1. Initialize SparkSession for BBQ2GO JSON demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_JSON_Demo") \
+    .getOrCreate()
+
+# 2. Create a DataFrame with a raw JSON string per row representing an order’s extras
+#    Example JSON: {"order_id":1001,"extras":{"bacon":2,"cheese":1}}
+jsonDF = spark.range(1).selectExpr(
+    """'{"order_id":1001,"extras":{"bacon":2,"cheese":1}}' AS jsonString"""
+)
+print("Raw JSON strings:")
+jsonDF.show(truncate=False)
+
+# 3. Extract the quantity of bacon (second element) using get_json_object
+df_extracted = jsonDF.select(
+    get_json_object(col("jsonString"), "$.extras.bacon").alias("bacon_qty"),  # I pull the bacon count
+    json_tuple(col("jsonString"), "order_id").alias("order_id")              # I extract order_id at top level
+)
+print("Extracted fields via get_json_object and json_tuple:")
+df_extracted.show()
+
+# 4. Build a struct of order_id and extras, then convert it back to JSON
+#    First define a sample flat DataFrame
+orders_df = spark.createDataFrame(
+    [(1002, {"bacon": 3, "cheese": 2})],
+    ["order_id", "extras_map"]
+)
+#    Convert to JSON string
+df_struct_json = orders_df.select(
+    to_json(col("extras_map")).alias("extras_json")                       # I serialize the extras map to JSON
+)
+print("Serialized extras_map to JSON:")
+df_struct_json.show(truncate=False)
+
+# 5. Parse that JSON back into a struct with a defined schema
+schema = StructType([
+    StructField("bacon", IntegerType(), True),
+    StructField("cheese", IntegerType(), True)
+])
+df_parsed = df_struct_json.select(
+    from_json(col("extras_json"), schema).alias("parsed_extras"),         # I parse JSON to struct
+    "extras_json"
+)
+print("Parsed JSON back into structured columns:")
+df_parsed.select("parsed_extras.*", "extras_json").show(truncate=False)
+
+# 6. Stop SparkSession now that JSON demo is complete
+spark.stop()                                                             # I stop Spark to free resources

@@ -1,0 +1,116 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, desc, max as max_, avg, sum as sum_, row_number, to_timestamp
+from pyspark.sql.window import Window
+
+# I start my Spark session so I have a unified entry point for both DataFrame and SQL work
+spark = (
+    SparkSession.builder
+    .appName("BBQ2GO_Ingredients_SQL_and_DF")  # I name the job to spot it easily in the Spark UI
+    .config("spark.sql.shuffle.partitions", "5")  # I tune shuffle partitions for balanced parallelism
+    .getOrCreate()
+)
+
+# I read the CSVs into a DataFrame, enforcing header parsing and letting Spark infer schema quickly
+ingredients = (
+    spark.read
+    .option("header", "true")  
+    .option("inferSchema", "true")
+    .csv("s3a://bbq2go-data/ingredients/2024/*.csv")
+    .withColumn("order_time", to_timestamp(col("order_time"), "yyyy-MM-dd HH:mm:ss"))
+    # I immediately convert order_time to TimestampType so I can use time‑based functions later
+)
+
+# I register my DataFrame as a SQL temporary view so I can write pure SQL queries against it
+ingredients.createOrReplaceTempView("bbq2go_ingredients")
+
+# =====================
+# 1) Simple GROUP BY in SQL
+# =====================
+# I group by ingredient_name in SQL to count how many records each ingredient has
+sql_count = spark.sql("""
+    SELECT
+      ingredient_name,
+      COUNT(*) AS usage_count
+    FROM bbq2go_ingredients
+    GROUP BY ingredient_name
+""")
+# I explain the plan to show that SQL and DataFrame compile to the same physical plan
+sql_count.explain()
+
+# =====================
+# 2) Same GROUP BY in DataFrame API
+# =====================
+# I group by ingredient_name in DataFrame code to count records—semantic twin of the SQL above
+df_count = (
+    ingredients
+      .groupBy("ingredient_name")
+      .count()
+      .withColumnRenamed("count", "usage_count")
+)
+df_count.explain()
+
+# =====================
+# 3) Maximum Usage: SQL vs. DataFrame
+# =====================
+# I find the highest usage_count via SQL by selecting MAX over the subquery
+sql_max = spark.sql("""
+    SELECT MAX(usage_count) AS peak_usage
+    FROM (
+      SELECT ingredient_name, COUNT(*) AS usage_count
+      FROM bbq2go_ingredients
+      GROUP BY ingredient_name
+    ) t
+""")
+# I trigger an action to get the result
+peak_sql = sql_max.take(1)
+
+# I compute the same maximum via DataFrame functions for a direct comparison
+df_peak = df_count.select(max_("usage_count").alias("peak_usage"))
+peak_df = df_peak.take(1)
+
+# =====================
+# 4) Top 5 Highest-Cost Ingredients: multi-step SQL
+# =====================
+# I use SQL window functions to rank ingredients by their average unit cost, per location
+top5_sql = spark.sql("""
+    SELECT location, ingredient_name, avg_cost
+    FROM (
+      SELECT
+        location,
+        ingredient_name,
+        AVG(unit_cost) AS avg_cost,
+        ROW_NUMBER() OVER (
+          PARTITION BY location
+          ORDER BY AVG(unit_cost) DESC
+        ) AS rank
+      FROM bbq2go_ingredients
+      WHERE quantity_used > 0
+      GROUP BY location, ingredient_name
+    ) ranked
+    WHERE rank <= 5
+    ORDER BY location, avg_cost DESC
+""")
+top5_sql.show(20)
+
+# =====================
+# 5) Top 5 Highest-Cost Ingredients: equivalent DataFrame
+# =====================
+# I filter out zero‑quantity records to focus on real usage
+filtered = ingredients.filter(col("quantity_used") > 0)
+
+# I group by location + ingredient, then compute average unit cost
+agg_df = (
+    filtered
+      .groupBy("location", "ingredient_name")
+      .agg(avg("unit_cost").alias("avg_cost"))
+)
+
+# I define a window spec to rank within each location
+window_spec = Window.partitionBy("location").orderBy(desc("avg_cost"))
+
+# I apply row_number over the window to tag the top items
+ranked_df = agg_df.withColumn("rank", row_number().over(window_spec))
+
+# I filter for top 5 per location and display
+top5_df = ranked_df.filter(col("rank") <= 5).orderBy("location", desc("avg_cost"))
+top5_df.show(20)

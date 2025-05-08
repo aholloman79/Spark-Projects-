@@ -1,0 +1,37 @@
+from pyspark.sql import SparkSession
+
+# I import SparkSession to create and manage my Spark application
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Random_Sample_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, simulating large-scale records
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+
+# I set a seed for reproducibility so that sampling yields the same rows each run
+seed = 5
+
+# I choose to sample without replacement to avoid duplicate rows in my sample
+withReplacement = False
+
+# I decide to take 50% of the DataFrame as my sample fraction
+fraction = 0.5
+
+# I perform the sampling transformation, which returns a new DataFrame
+sampled_df = df.sample(withReplacement, fraction, seed)
+# - withReplacement=False ensures each record appears at most once
+# - fraction=0.5 targets half of the total rows
+# - seed=5 fixes the random number generator for consistency
+
+# I count the sampled rows to see how many records were extracted
+sample_count = sampled_df.count()
+print(f"Number of sampled records: {sample_count}")
+# - count() is an action that triggers the sampling and returns the row count
+
+# I show a few sampled rows to inspect the random selection
+sampled_df.show(5, truncate=False)
+# - show() triggers another action, previewing sample content for validation
+
+# I stop the SparkSession to free resources when finished
+spark.stop()
+# - stop() cleanly shuts down Spark, releasing cluster or local resources

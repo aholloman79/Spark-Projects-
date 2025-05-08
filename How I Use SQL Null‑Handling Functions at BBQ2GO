@@ -1,0 +1,25 @@
+from pyspark.sql import SparkSession                                           # I import SparkSession to manage my Spark application
+from pyspark.sql.functions import expr, lit                                    # I import expr to use SQL expressions and lit to create literals
+
+# 1. Initialize SparkSession for BBQ2GO null‑function demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_NullFunction_Demo") \
+    .getOrCreate()
+
+# 2. Create a trivial DataFrame to run SQL functions against
+df = spark.createDataFrame([(1,)], ["dummy"])                                  # I need at least one row to SELECT against
+df.createOrReplaceTempView("dfTable")                                          # I register it as a temporary view for SQL
+
+# 3. Demonstrate SQL null‑handling functions via selectExpr
+result_df = df.selectExpr(
+    "ifnull(null, 'return_value')            AS ifnull_example",               # I return the second argument when the first is null
+    "nullif('value', 'value')                AS nullif_example",               # I return null because the two args are equal
+    "nvl(null, 'return_value')                AS nvl_example",                  # I alias NVL, which mirrors ifnull behavior
+    "nvl2('not_null', 'return_value', 'else') AS nvl2_example"                 # I return 'return_value' because the first is not null
+)
+
+print("Demonstrating SQL null‑handling functions in Spark:")
+result_df.show(truncate=False)
+
+# 4. Stop Spark session now that null‑function demo is complete
+spark.stop()                                                                    # I shut down Spark to free resources

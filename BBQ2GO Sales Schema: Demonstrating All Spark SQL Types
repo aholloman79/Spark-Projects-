@@ -1,0 +1,95 @@
+from pyspark.sql import SparkSession                                     # I import SparkSession to initialize Spark and manage my jobs
+from pyspark.sql.types import (                                         
+    ByteType, ShortType, IntegerType, LongType, FloatType, DoubleType,
+    DecimalType, StringType, BinaryType, BooleanType, TimestampType, DateType,
+    ArrayType, MapType, StructType, StructField
+)                                                                       # I import all Spark SQL types to demonstrate each one with my BBQ2GO data
+from decimal import Decimal                                              # I import Decimal to create precise DecimalType values
+from datetime import datetime, date                                      # I import datetime/date for TimestampType and DateType examples
+
+# I start a SparkSession named for BBQ2GO so I can track this demonstration in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Spark_Types_Demo") \
+    .getOrCreate()
+
+# 1. ByteType: I model a tiny customer spice-rating (–128 to 127) for our sandwich heat levels
+byte_schema = StructType([StructField("spice_rating", ByteType(), True)])
+byte_df = spark.createDataFrame([(10,), (-5,)], schema=byte_schema)     # I create sample rows to test ByteType handling
+byte_df.show()                                                          # I display results to confirm correct parsing
+
+# 2. ShortType: I store kiosk aisle numbers (–32,768 to 32,767) where customers pick up orders
+short_schema = StructType([StructField("aisle_number", ShortType(), True)])
+short_df = spark.createDataFrame([(100,), (205,)], schema=short_schema)
+short_df.show()                                                         # I verify that aisle numbers fit in ShortType
+
+# 3. IntegerType: I track daily sandwich sales counts, sufficient for counts up to ~2 billion
+int_schema = StructType([StructField("daily_sandwich_sales", IntegerType(), True)])
+int_df = spark.createDataFrame([(150,), (230,)], schema=int_schema)
+int_df.show()                                                           # I inspect sales counts to ensure IntegerType is used
+
+# 4. LongType: I log cumulative loaded‑fries sold across all airport terminals (8‑byte range)
+long_schema = StructType([StructField("total_fries_sold", LongType(), True)])
+long_df = spark.createDataFrame([(1234567890123,), (9876543210987,)], schema=long_schema)
+long_df.show()                                                          # I confirm that large totals are correctly stored
+
+# 5. FloatType: I model cost of a side of rub (4‑byte precision)
+float_schema = StructType([StructField("unit_rub_cost", FloatType(), True)])
+float_df = spark.createDataFrame([(2.55,), (3.10,)], schema=float_schema)
+float_df.show()                                                         # I check float precision for ingredient costing
+
+# 6. DoubleType: I model cost of premium bacon (8‑byte precision)
+double_schema = StructType([StructField("unit_bacon_cost", DoubleType(), True)])
+double_df = spark.createDataFrame([(1.25,), (1.75,)], schema=double_schema)
+double_df.show()                                                        # I inspect double precision values
+
+# 7. DecimalType: I record daily revenue with exact two‑decimal precision
+decimal_schema = StructType([StructField("daily_revenue", DecimalType(10,2), True)])
+decimal_df = spark.createDataFrame([(Decimal("12345.67"),), (Decimal("8910.11"),)], schema=decimal_schema)
+decimal_df.show()                                                       # I validate exact decimal calculations
+
+# 8. StringType: I store menu item names for display in dashboards
+string_schema = StructType([StructField("menu_item", StringType(), True)])
+string_df = spark.createDataFrame([("Brisket Sandwich",), ("Loaded Fries",)], schema=string_schema)
+string_df.show()                                                        # I verify correct string storage
+
+# 9. BinaryType: I store a small QR code image for mobile ordering as bytes
+binary_schema = StructType([StructField("qr_code_png", BinaryType(), True)])
+binary_df = spark.createDataFrame([(bytearray(b'\x89PNG...'),)], schema=binary_schema)
+binary_df.show()                                                        # I ensure binary payload is accepted
+
+# 10. BooleanType: I flag whether customers used mobile pay for convenience analytics
+bool_schema = StructType([StructField("mobile_pay_used", BooleanType(), True)])
+bool_df = spark.createDataFrame([(True,), (False,)], schema=bool_schema)
+bool_df.show()                                                          # I inspect boolean flags for payment method
+
+# 11. TimestampType: I capture exact sale timestamps for time‑series analysis
+ts_schema = StructType([StructField("sale_timestamp", TimestampType(), True)])
+ts_df = spark.createDataFrame([(datetime(2024,5,8,14,30),)], schema=ts_schema)
+ts_df.show()                                                            # I verify that timestamps parse correctly
+
+# 12. DateType: I record sale dates for daily reporting without time component
+date_schema = StructType([StructField("sale_date", DateType(), True)])
+date_df = spark.createDataFrame([(date(2024,5,8),)], schema=date_schema)
+date_df.show()                                                          # I check date-only storage
+
+# 13. ArrayType: I list custom toppings per loaded‑fries order as an array of strings
+array_schema = StructType([StructField("toppings", ArrayType(StringType()), True)])
+array_df = spark.createDataFrame([(["cheese","bacon","jalapeno"],)], schema=array_schema)
+array_df.show()                                                         # I confirm array handling for multiple toppings
+
+# 14. MapType: I map each ingredient to its quantity for custom sandwich builds
+map_schema = StructType([StructField("ingredients_map", MapType(StringType(), IntegerType()), True)])
+map_df = spark.createDataFrame([({"brisket":2, "bacon":1},)], schema=map_schema)
+map_df.show()                                                           # I validate key‑value mapping support
+
+# 15. StructType: I create a nested schema for pickup location details (terminal & gate)
+address_struct = StructType([
+    StructField("terminal", StringType(), True),
+    StructField("gate", IntegerType(), True)
+])
+struct_schema = StructType([StructField("pickup_location", address_struct, True)])
+struct_df = spark.createDataFrame([ (("A", 12),) ], schema=struct_schema)
+struct_df.show()                                                        # I ensure nested structs store complex types
+
+# I stop the SparkSession to release resources after type demonstrations
+spark.stop()                                                            # I cleanly shut down Spark when done

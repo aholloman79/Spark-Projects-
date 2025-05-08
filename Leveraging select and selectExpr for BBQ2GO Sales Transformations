@@ -1,0 +1,61 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, expr, column
+
+# I start a SparkSession named for BBQ2GO so I can track this in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Select_SelectExpr_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales data into a DataFrame for demonstration
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+# - This DataFrame has columns: terminal, item, quantity, total_price, etc.
+
+# 1) Simple select by column name string
+#    I select only the 'item' column to see which products sold
+df.select("item").show(3)
+
+# 2) Selecting multiple columns by name
+#    I pick 'item' and 'quantity' to examine sale counts per product
+df.select("item", "quantity").show(3)
+
+# 3) Using different column reference methods (all equivalent)
+#    I select 'total_price' via expr(), col(), and column()
+df.select(
+    expr("total_price"),       # parsed expression
+    col("total_price"),        # column reference
+    column("total_price")      # identical column reference
+).show(3)
+
+# 4) Renaming a column using expr AS
+#    I create a new column 'revenue' aliasing 'total_price'
+df.select(expr("total_price AS revenue")).show(3)
+
+# 5) Renaming back via alias() on an expr
+#    I revert 'revenue' back to 'total_price' for demonstration
+df.select(expr("total_price AS revenue").alias("total_price")).show(3)
+
+# 6) Using selectExpr for concise SQL-like transformations
+#    I add a boolean 'high_value' flag for sales over $10
+df.selectExpr(
+    "item",
+    "quantity",
+    "total_price",
+    "(total_price > 10) AS high_value"  # new column via SQL expression
+).show(3)
+
+# 7) Including all columns and adding a computed column
+#    I flag orders where fries and sandwiches are same item
+df.selectExpr(
+    "*",  # include every existing column
+    "(item = 'Loaded Fries') AS is_fries"  # new boolean column
+).show(3)
+
+# 8) Aggregations via selectExpr
+#    I compute average quantity and count distinct terminals in one shot
+df.selectExpr(
+    "avg(quantity) AS avg_qty",
+    "count(distinct(terminal)) AS unique_terminals"
+).show(1)
+
+# I stop SparkSession to free resources once done
+spark.stop()

@@ -1,0 +1,63 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, instr, expr
+
+# I start by initializing my SparkSession so I can work interactively with my retail DataFrame
+spark = SparkSession.builder \
+    .appName("BBQ2GO_BooleanFilters_Demo") \
+    .getOrCreate()
+
+# I load the daily sales data for my BBQ2GO indoor kiosk, letting Spark infer column types
+df = (spark.read
+      .option("header", True)          # I tell Spark that the first row contains column names
+      .option("inferSchema", True)     # I let Spark automatically detect data types
+      .csv("/data/bbq2go/daily-sales/2010-12-01.csv")
+     )
+print("I loaded my daily sales data and here's the schema:")
+df.printSchema()
+
+# I filter to keep only orders with InvoiceNo exactly 536365 using a Boolean column expression
+expensive_orders = (df
+    .where(col("InvoiceNo") == 536365)       # I check equality with == for InvoiceNo
+    .select("InvoiceNo", "Description", "UnitPrice")
+)
+print("I filtered orders where InvoiceNo == 536365:")
+expensive_orders.show(5, False)
+
+# I demonstrate the equivalent string‑based filter with a SQL‑style predicate
+sql_filtered = df.where("InvoiceNo = 536365")
+print("I applied the same filter using a SQL string predicate:")
+sql_filtered.select("InvoiceNo", "Description", "UnitPrice").show(5, False)
+
+# I filter out InvoiceNo 536365 using the not‑equal operator
+not_target = df.where(col("InvoiceNo") != 536365)  # I exclude the previous InvoiceNo
+print("I filtered out orders where InvoiceNo != 536365:")
+not_target.select("InvoiceNo", "Description").show(5, False)
+
+# I create two reusable Boolean expressions for more complex filtering
+price_gt_600 = col("UnitPrice") > 600                          # I flag items priced above $600
+description_has_postage = instr(col("Description"), "POSTAGE") >= 1  # I flag descriptions containing the word POSTAGE
+
+# I mix AND and OR logic: I want StockCode "DOT" AND (high price OR contains POSTAGE)
+combo_filter = df.where(
+    (col("StockCode") == "DOT") & (price_gt_600 | description_has_postage)
+)
+print("I applied a combined Boolean filter: StockCode DOT AND (UnitPrice>600 OR 'POSTAGE' in Description):")
+combo_filter.select("InvoiceNo", "StockCode", "Description", "UnitPrice").show(5, False)
+
+# I add a new Boolean column 'isExpensive' to mark rows matching my combo_filter logic
+df_flagged = df.withColumn(
+    "isExpensive",
+    (col("StockCode") == "DOT") & (price_gt_600 | description_has_postage)  # I reuse my Boolean expressions
+)
+print("I added an 'isExpensive' flag column based on my Boolean logic:")
+df_flagged.select("InvoiceNo", "StockCode", "Description", "UnitPrice", "isExpensive")\
+    .where("isExpensive = true")\
+    .show(5, False)
+
+# I illustrate null-safe equality to catch exact matches even when values are null
+df_null_safe = df.where(col("Description").eqNullSafe("hello"))  # I use eqNullSafe to handle nulls safely
+print("I demonstrated a null‑safe filter for Description == 'hello':")
+df_null_safe.show(5, False)
+
+# I stop my Spark session now that I’ve demonstrated Boolean filtering techniques
+spark.stop()

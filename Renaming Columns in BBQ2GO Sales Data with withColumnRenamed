@@ -1,0 +1,21 @@
+from pyspark.sql import SparkSession  # I import SparkSession to create and manage my Spark application
+
+# I start a SparkSession named for BBQ2GO so I can monitor this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Rename_Columns_Demo") \
+    .getOrCreate()
+
+# I load our airport‑kiosk sales DataFrame, which includes a column 'DEST_COUNTRY_NAME'
+df = spark.read.json("s3a://bbq2go-data/airport-sales/2024/*.json")
+# - The DataFrame has columns like DEST_COUNTRY_NAME, ORIGIN_COUNTRY_NAME, count, etc.
+
+# I rename the 'DEST_COUNTRY_NAME' column to 'dest' for brevity
+df_renamed = df.withColumnRenamed("DEST_COUNTRY_NAME", "dest")
+# - withColumnRenamed(oldName, newName) updates the schema without altering data
+
+# I list the columns to verify that 'DEST_COUNTRY_NAME' is now 'dest'
+print(df_renamed.columns)
+# - This prints something like ['dest', 'ORIGIN_COUNTRY_NAME', 'count', ...]
+
+# I stop the SparkSession to free resources when finished
+spark.stop()

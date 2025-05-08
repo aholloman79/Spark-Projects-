@@ -1,0 +1,25 @@
+from pyspark.sql import SparkSession                                      # I import SparkSession to orchestrate all Spark operations
+
+# I start a SparkSession named for BBQ2GO so I can monitor it in the Spark UI
+spark = (
+    SparkSession.builder
+      .appName("BBQ2GO_Structured_Types_Overview")                       # I label the job clearly for our restaurant analysis
+      .getOrCreate()
+)
+
+# I create a simple DataFrame of sale quantities (0–499) to demonstrate Spark’s internal types
+df = spark.range(500).toDF("quantity_sold")                             # I generate 500 rows with a single column 'quantity_sold'
+
+# I use a Spark expression to add 5 bonus items to every sale,
+# knowing this addition happens in Spark’s Catalyst engine—not in Python directly
+bonus_df = df.select(df["quantity_sold"] + 5)                           # I build a Catalyst expression that says “add 5” to each value
+
+# I rename the resulting column to reflect that these are adjusted quantities
+bonus_df = bonus_df.withColumnRenamed("(quantity_sold + 5)", "adjusted_quantity")
+                                                                        # I give the new column a meaningful name for downstream use
+
+# I show the first 10 rows to verify that Spark applied the addition at scale
+bonus_df.show(10)                                                       # I trigger execution and print a sample of transformed results
+
+# I stop the SparkSession to release cluster resources when I’m done
+spark.stop()                                                            # I cleanly shut down Spark to free up memory and cores

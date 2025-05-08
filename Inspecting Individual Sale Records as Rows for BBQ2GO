@@ -1,0 +1,26 @@
+from pyspark.sql import SparkSession                       # I import SparkSession to create and manage my Spark application
+from pyspark.sql import Row                                # I import Row so I can inspect individual record objects
+
+# I start a SparkSession named for BBQ2GO to track this example in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Row_Record_Demo") \
+    .getOrCreate()
+
+# I create a sample DataFrame of BBQ2GO order records with sale_id, item, and total_price
+data = [
+    Row(sale_id=101, item="Brisket Sandwich", total_price=12.99),
+    Row(sale_id=102, item="Loaded Fries", total_price=8.49),
+    Row(sale_id=103, item="Brisket Sandwich", total_price=13.49)
+]
+df = spark.createDataFrame(data)                          # I parallelize Row objects into an RDD and convert to DataFrame
+
+# I retrieve the first record (Row) from the DataFrame
+first_record = df.first()                                 # I use first() to return the very first Row object to the driver
+print(first_record)                                       # I print the Row to inspect its fields and values
+
+# I also demonstrate using take(1) which returns a list of Row objects
+first_list = df.take(1)                                   # I use take(1) to fetch the first row in a list form
+print(first_list)                                         # I print the list to show [Row(...)] structure
+
+# I stop the SparkSession to free up resources after inspection
+spark.stop()                                              # I cleanly shut down Spark when done

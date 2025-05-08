@@ -1,0 +1,66 @@
+# dynamic_pricing_experiment.py
+
+from pyspark.sql import SparkSession                                    # I import SparkSession to initialize Spark
+from pyspark.sql.functions import col, rand, when                        # I import rand for randomization and when for conditional pricing
+from pyspark.sql.types import DoubleType                                 # I import DoubleType to cast price changes
+
+# 1. Initialize Spark session for BBQ2GO dynamic pricing experiments
+spark = SparkSession.builder \
+    .appName("BBQ2GO_DynamicPricingExperiment") \
+    .getOrCreate()
+
+# 2. Load historical POS data with item prices
+sales_df = (  
+    spark.read
+         .option("header", True)                                       # I use headers to infer column names
+         .option("inferSchema", True)                                  # I let Spark detect column types
+         .csv("/data/pos_sales/*.csv")                                 # Path to sales data
+)  # expected columns: order_id, customer_id, item_id, price, quantity, timestamp
+
+# 3. Define experiment groups by random assignment
+#    I use rand() to assign roughly half of transactions to the “treatment” group
+experiment_df = sales_df.withColumn(
+    "treatment", when(rand() < 0.5, 1).otherwise(0)                   # I flag 50% of rows as treatment group
+)
+
+# 4. Apply price perturbation (±5%) to treatment group only
+#    I randomly choose + or – perturbation and adjust price accordingly
+perturbed_df = experiment_df.withColumn(
+    "adjusted_price",
+    when(
+        col("treatment") == 1,
+        col("price") * (1 + (rand() * 0.10 - 0.05))                  # I compute price * (1 ± 5%) using rand() in [0,1)
+    ).otherwise(col("price"))                                        # Control group retains original price
+).withColumn("adjusted_price", col("adjusted_price").cast(DoubleType()))  # I cast to DoubleType
+
+# 5. Recalculate revenue per row using adjusted prices
+revenue_df = perturbed_df.withColumn(
+    "revenue",
+    col("adjusted_price") * col("quantity")                         # I compute revenue using perturbed or original price
+)
+
+# 6. Aggregate per-group revenue metrics for analysis
+metrics_df = (
+    revenue_df
+    .groupBy("treatment")                                            # I group by treatment vs. control
+    .agg(
+        {"revenue": "sum",                                           # I sum total revenue
+         "order_id": "count"}                                        # I count number of orders
+    )
+    .withColumnRenamed("sum(revenue)", "total_revenue")             # I name aggregated columns
+    .withColumnRenamed("count(order_id)", "order_count")            
+    .withColumn(
+        "avg_revenue_per_order",
+        col("total_revenue") / col("order_count")                   # I compute average revenue per order
+    )
+)
+
+# 7. Write experiment results to CSV for A/B test analysis
+metrics_df.coalesce(1) \
+    .write \
+    .option("header", True) \
+    .mode("overwrite") \
+    .csv("/outputs/bbq2go_pricing_experiment_metrics")
+
+# 8. Stop Spark session to release resources
+spark.stop()                                                          # I shut down Spark after the batch job completes

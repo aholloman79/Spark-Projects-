@@ -1,0 +1,133 @@
+# sales_forecasting_pipeline.py
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    col, sum as spark_sum,
+    hour, to_date, dayofweek, when, lit
+)
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import VectorAssembler, OneHotEncoder, StringIndexer
+from pyspark.ml.regression import GBTRegressor
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.sql.types import IntegerType, DateType
+import datetime
+from pyspark.sql import Row
+
+# 1. Initialize Spark session for BBQ2GO sales forecasting
+spark = SparkSession.builder \
+    .appName("BBQ2GO_Sales_Forecasting") \
+    .getOrCreate()
+
+# 2. Ingest raw POS logs with schema inference and headers
+raw_df = (
+    spark.read
+         .option("inferSchema", True)    # I let Spark infer types from CSV data
+         .option("header", True)         # I use the first line as column names
+         .csv("/data/bbq2go/pos_logs/*.csv")  # Path to all POS export files
+)
+
+# 3. Aggregate to hourly revenue
+agg_df = (
+    raw_df
+    .withColumn("revenue", col("quantity") * col("price"))  # calculate revenue per record
+    .withColumn("hour", hour(col("timestamp")))            # extract hour of sale
+    .withColumn("date", to_date(col("timestamp")))         # extract date of sale
+    .groupBy("date", "hour")                               # group by each hour of each day
+    .agg(spark_sum("revenue").alias("hourly_revenue"))     # sum revenue into hourly buckets
+)
+
+# 4. Feature engineering: add day‑of‑week and weekend flag
+feat_df = (
+    agg_df
+    .withColumn("dow", dayofweek(col("date")))  # 1 = Sunday … 7 = Saturday
+    .withColumn(
+        "is_weekend",
+        when(col("dow").isin(1, 7), 1).otherwise(0)  # flag weekends
+    )
+)
+
+# Optional holiday flag
+holidays = ["2025-01-01", "2025-07-04", "2025-12-25"]
+feat_df = feat_df.withColumn(
+    "is_holiday",
+    when(col("date").isin(*holidays), 1).otherwise(0)  # flag known holidays
+)
+
+# 5. (Optional) Join mall foot‑traffic counts by date and hour
+traffic_df = (
+    spark.read
+         .option("inferSchema", True)
+         .option("header", True)
+         .csv("/data/bbq2go/mall_traffic/hourly_counts.csv")  # path to traffic data
+    .withColumn("date", to_date(col("timestamp")))           # extract date
+    .withColumn("hour", hour(col("timestamp")))             # extract hour
+    .select("date", "hour", col("count").alias("mall_traffic"))  # rename count column
+)
+feat_df = feat_df.join(traffic_df, on=["date", "hour"], how="left")  # left join to preserve all hours
+
+# 6. Assemble features into a vector
+#    - Index day-of-week
+dow_idx = StringIndexer(inputCol="dow", outputCol="dow_idx")
+#    - One‑hot encode the index
+dow_ohe = OneHotEncoder(inputCols=["dow_idx"], outputCols=["dow_ohe"])
+#    - Combine numeric and vector features
+assembler = VectorAssembler(
+    inputCols=["hour", "is_weekend", "is_holiday", "mall_traffic", "dow_ohe"],
+    outputCol="features"
+)
+
+# 7. Train‑test split: 80% training, 20% testing
+train_df, test_df = feat_df.randomSplit([0.8, 0.2], seed=42)
+
+# 8. Configure and train a Gradient‑Boosted Tree regressor
+gbt = GBTRegressor(
+    featuresCol="features",
+    labelCol="hourly_revenue",
+    maxIter=50,    # number of trees
+    maxDepth=5     # tree depth controls complexity
+)
+pipeline = Pipeline(stages=[dow_idx, dow_ohe, assembler, gbt])
+model = pipeline.fit(train_df)  # train model on training split
+
+# 9. Evaluate on test set using RMSE
+predictions = model.transform(test_df)
+evaluator = RegressionEvaluator(
+    labelCol="hourly_revenue",
+    predictionCol="prediction",
+    metricName="rmse"  # root mean squared error
+)
+rmse = evaluator.evaluate(predictions)
+print(f"Test RMSE: {rmse:.2f}")
+
+# 10. Forecast next 7 days × 24 hours
+today = datetime.date.today()
+future_rows = [
+    (today + datetime.timedelta(days=d), int(h))
+    for d in range(1, 8) for h in range(24)
+]
+future_df = spark.createDataFrame(future_rows, ["date", "hour"])
+
+# repeat feature engineering on future skeleton
+future_feat = (
+    future_df
+    .withColumn("dow", dayofweek(col("date")))
+    .withColumn("is_weekend", when(col("dow").isin(1, 7), 1).otherwise(0))
+    .withColumn("is_holiday", when(col("date").isin(*holidays), 1).otherwise(0))
+    .join(traffic_df, on=["date", "hour"], how="left")  # attach expected traffic
+)
+
+# 11. Predict future hourly revenue
+future_preds = model.transform(future_feat)
+output = future_preds.select("date", "hour", col("prediction").alias("forecasted_revenue"))
+
+# 12. Write forecasts to CSV for downstream scheduling
+output \
+  .orderBy("date", "hour") \
+  .coalesce(1) \
+  .write \
+  .option("header", True) \
+  .mode("overwrite") \
+  .csv("/outputs/bbq2go_next_week_forecast")
+
+# 13. Clean up Spark session
+spark.stop()

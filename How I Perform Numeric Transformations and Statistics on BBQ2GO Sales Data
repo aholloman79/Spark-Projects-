@@ -1,0 +1,88 @@
+from pyspark.sql import SparkSession                             # I import SparkSession to initialize and manage my Spark application
+from pyspark.sql.functions import (                              # I import all necessary functions for numeric operations
+    col, expr, pow, round, bround, lit, corr, monotonically_increasing_id
+)
+
+# 1. Initialize SparkSession for my BBQ2GO numeric operations demo
+spark = SparkSession.builder \
+    .appName("BBQ2GO_NumericOperations_Demo") \
+    .getOrCreate()
+
+# 2. Load daily sales data for December 1, 2010, inferring schema for numeric columns
+df = (spark.read
+      .option("header", True)               # I tell Spark to use the first row as column names
+      .option("inferSchema", True)          # I let Spark detect numeric types automatically
+      .csv("/data/bbq2go/retail-data/by-day/2010-12-01.csv")
+     )
+print("Loaded daily sales data with inferred Quantity and UnitPrice types:")
+df.printSchema()                             # I print schema to confirm Quantity and UnitPrice are numeric
+
+# 3. Fabricate a corrected quantity: (Quantity*UnitPrice)^2 + 5
+fabricatedQuantity = (pow(col("Quantity") * col("UnitPrice"), 2) + lit(5)) \
+    .alias("realQuantity")                 # I compute the formula and alias it for clarity
+df.select("CustomerId", fabricatedQuantity) \
+  .show(2, False)                          # I show two rows to verify the new computed column
+
+# 4. Express the same calculation using SQL-style selectExpr
+df.selectExpr(
+    "CustomerId",
+    "(POWER(Quantity * UnitPrice, 2.0) + 5) AS realQuantity"
+).show(2, False)                           # I demonstrate string-based expressions for flexibility
+
+# 5. Round UnitPrice to one decimal place
+df.select(
+    col("UnitPrice"),
+    round(col("UnitPrice"), 1).alias("roundedUnitPrice")
+).show(5, False)                          # I display rounding results to inspect precision handling
+
+# 6. Compare default rounding vs. bankers’ rounding on tie values
+tie_df = spark.createDataFrame([("2.5",), ("3.5",)], ["val"])
+tie_df.select(
+    round(lit("2.5")).alias("round_2_5"), # I show standard round behavior
+    bround(lit("2.5")).alias("bround_2_5"), # I show bankers’ rounding
+    round(lit("3.5")).alias("round_3_5"),
+    bround(lit("3.5")).alias("bround_3_5")
+).show()                                   # I compare how ties are resolved differently
+
+# 7. Compute Pearson correlation using DataFrameStat functions
+pearson = df.stat.corr("Quantity", "UnitPrice")  
+print(f"Pearson correlation (Quantity vs. UnitPrice): {pearson:.4f}")  # I quantify linear relationship with stat API
+
+# 8. Compute Pearson correlation via select(corr())
+df.select(corr("Quantity", "UnitPrice").alias("pearson_corr")) \
+  .show(1, False)                          # I confirm consistency of corr() function
+
+# 9. Generate descriptive statistics for numeric columns
+print("Descriptive statistics for Quantity, UnitPrice, CustomerID:")
+df.describe().show()                      # I quickly view count, mean, stddev, min, max
+
+# 10. Manually aggregate summary stats using expressions
+agg_df = df.agg(
+    expr("count(Quantity) as qty_count"),  # I count non-null quantities
+    expr("mean(UnitPrice) as avg_price"),  # I calculate average price
+    expr("stddev_pop(Quantity) as qty_stddev"), # I compute population stddev
+    expr("min(UnitPrice) as min_price"),   # I find minimum price
+    expr("max(UnitPrice) as max_price")    # I find maximum price
+)
+print("Manual aggregation of key statistics:")
+agg_df.show()                             # I verify custom aggregations match describe()
+
+# 11. Approximate median (50th percentile) of UnitPrice
+median = df.stat.approxQuantile("UnitPrice", [0.5], 0.05)[0]  
+print(f"Approximate median UnitPrice: {median:.2f}")  # I use approxQuantile for scalable percentile estimation
+
+# 12. Cross-tabulate frequencies of StockCode vs. Quantity
+print("Cross-tabulation of StockCode and Quantity frequencies:")
+df.stat.crosstab("StockCode", "Quantity").show(5, False)  # I explore joint distributions
+
+# 13. Identify frequent item sets for StockCode and Quantity
+print("Frequent items for StockCode and Quantity:")
+df.stat.freqItems(["StockCode", "Quantity"]).show()      # I find items appearing frequently together
+
+# 14. Add a unique row identifier to each record
+df_id = df.select(monotonically_increasing_id().alias("row_id"), "*")  
+print("DataFrame with unique monotonically_increasing_id per row:")
+df_id.select("row_id", "InvoiceNo").show(5, False)        # I inspect IDs to confirm uniqueness
+
+# 15. Stop Spark session now that numeric demos are complete
+spark.stop()                                         # I cleanly shut down Spark to free resources

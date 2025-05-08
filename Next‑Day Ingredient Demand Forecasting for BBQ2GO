@@ -1,0 +1,167 @@
+# inventory_demand_prediction.py
+
+from pyspark.sql import SparkSession, Row                        # I import SparkSession to start Spark and Row to build manual records
+from pyspark.sql.functions import (                             # I import functions for aggregations, windows, and date math
+    col, sum as spark_sum, window, dayofweek, when,
+    current_date, date_add
+)
+from pyspark.ml import Pipeline                                 # I import Pipeline to chain feature steps and model training
+from pyspark.ml.feature import VectorAssembler, StringIndexer, OneHotEncoder  
+                                                                # I import transformers to prepare categorical and numeric features
+from pyspark.ml.regression import RandomForestRegressor         # I choose RandomForest for robust regression on usage data
+from pyspark.ml.evaluation import RegressionEvaluator           # I import evaluator to measure RMSE on test set
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType  
+                                                                # I import types to define my recipe mapping schema
+
+# 1. Initialize Spark session for BBQ2GO inventory forecasting
+spark = (
+    SparkSession.builder
+    .appName("BBQ2GO_InventoryDemandPrediction")               # I name the app so I can track in the Spark UI
+    .getOrCreate()
+)
+
+# 2. Define recipe-to-ingredient mapping inline
+recipe_data = [                                                # I list each menu item’s ingredient usage per unit
+    ("Brisket Sandwich", "Sliced smoked brisket",   6.0),
+    ("Brisket Sandwich", "Brioche or Kaiser roll",  1.0),
+    ("Brisket Sandwich", "BBQ sauce",               0.5),
+    ("Brisket Sandwich", "Pickles",                 0.2),
+    ("Brisket Sandwich", "Sliced onion (optional)", 0.3),
+    ("Brisket Sandwich", "Seasoned bacon",          1.5),
+    ("Loaded Brisket Fries", "Russet fries",             8.0),
+    ("Loaded Brisket Fries", "Shredded smoked brisket", 4.0),
+    ("Loaded Brisket Fries", "Shredded cheddar cheese", 2.0),
+    ("Loaded Brisket Fries", "Seasoned bacon bits",     1.0),
+    ("Loaded Brisket Fries", "BBQ sauce drizzle",       0.3),
+    ("Loaded Brisket Fries", "Sour cream dollop",       0.5),
+    ("Loaded Brisket Fries", "Chopped green onions",    0.2),
+]
+
+# 3. Create DataFrame for recipe mapping
+schema = StructType([                                          # I define schema to match my tuple structure
+    StructField("item_id",         StringType(), True),
+    StructField("ingredient",      StringType(), True),
+    StructField("amount_per_unit", DoubleType(), True),
+])
+recipe_df = spark.createDataFrame(recipe_data, schema)         # I build the mapping DataFrame for joins
+
+# 4. Load daily POS sales data
+sales_df = (
+    spark.read
+         .option("inferSchema", True)                         # I let Spark detect types automatically
+         .option("header", True)                              # I use first row as column names
+         .csv("/data/pos_daily_sales/*.csv")                  # I load all daily sales CSVs
+)  # expected columns: date (Date), item_id (String), quantity (Int)
+
+# 5. Join sales with recipes and compute daily ingredient usage
+usage_df = (
+    sales_df
+    .join(recipe_df, on="item_id", how="inner")               # I combine sales with per-unit ingredient amounts
+    .withColumn("used_amount", col("quantity") * col("amount_per_unit"))  # I calculate total usage per record
+    .groupBy("date", "ingredient")                            # I group by date and ingredient
+    .agg(spark_sum("used_amount").alias("daily_usage"))       # I sum usage to daily totals
+)
+
+# 6. Compute 7‑day sliding window averages of usage
+windowed_df = (
+    usage_df
+    .groupBy(
+        window(col("date"), "7 days", "1 day"),               # I define a sliding window of 7 days advancing daily
+        col("ingredient")
+    )
+    .agg(spark_sum("daily_usage").alias("window_usage_sum"))  # I sum usage inside each window
+    .withColumn("window_avg_usage", col("window_usage_sum") / 7)  # I compute average per day over window
+    .select(col("window.end").alias("date"), "ingredient", "window_avg_usage")
+)
+
+# 7. Add calendar features to capture weekly demand patterns
+feat_df = (
+    windowed_df
+    .withColumn("dow", dayofweek(col("date")))               # I get day‑of‑week index (1=Sunday…7=Saturday)
+    .withColumn("is_weekend",                                  # I flag weekend days for holiday effect
+        when(col("dow").isin(1,7), 1).otherwise(0)
+    )
+)
+
+# 8. Encode ingredient as categorical for ML
+idx = StringIndexer(inputCol="ingredient", outputCol="ing_idx")  # I assign numeric index per ingredient
+ohe = OneHotEncoder(inputCols=["ing_idx"], outputCols=["ing_ohe"])  # I one-hot encode to avoid ordinal bias
+
+# 9. Assemble features into vector
+assembler = VectorAssembler(
+    inputCols=["window_avg_usage", "dow", "is_weekend", "ing_ohe"],
+    outputCol="features"                                       # I combine all predictors for modeling
+)
+
+# 10. Split into training and test sets
+train_df, test_df = feat_df.randomSplit([0.8, 0.2], seed=42)    # I reserve 20% for evaluation, seed for reproducibility
+
+# 11. Configure Random Forest regressor
+rf = RandomForestRegressor(
+    featuresCol="features",
+    labelCol="window_avg_usage",                                # I predict next-day average usage
+    numTrees=50,                                                # I choose 50 trees for stability
+    maxDepth=5                                                  # I limit depth to control overfitting
+)
+
+# 12. Build and train ML pipeline
+pipeline = Pipeline(stages=[idx, ohe, assembler, rf])          # I chain encoders and model into one workflow
+model = pipeline.fit(train_df)                                 # I fit the pipeline on training data
+
+# 13. Evaluate model performance on test set using RMSE
+preds = model.transform(test_df)                               # I generate predictions on held‑out data
+evaluator = RegressionEvaluator(
+    labelCol="window_avg_usage",
+    predictionCol="prediction",
+    metricName="rmse"                                          # I choose RMSE for regression quality
+)
+rmse = evaluator.evaluate(preds)
+print(f"I evaluated my model: Test RMSE = {rmse:.2f}")
+
+# 14. Prepare tomorrow’s skeleton DataFrame of ingredients
+tomorrow = date_add(current_date(), 1)                         # I compute next calendar date
+ingredients = recipe_df.select("ingredient").distinct()         # I list all ingredients
+tomorrow_df = ingredients.withColumn("date", tomorrow)         # I cross‑join date with ingredient list
+
+# 15. Build features for tomorrow using last window averages
+tom_feat = (
+    windowed_df
+    .filter(col("date") == tomorrow)                           # I select the most recent window average
+    .select("date", "ingredient", "window_avg_usage")          
+    .join(tomorrow_df, on=["date","ingredient"], how="right")  # I ensure every ingredient appears
+    .na.fill(0, subset=["window_avg_usage"])                   # I fill missing with zero usage
+    .withColumn("dow", dayofweek(col("date")))                 
+    .withColumn("is_weekend", when(col("dow").isin(1,7), 1).otherwise(0))
+)
+
+# 16. Predict tomorrow’s ingredient usage
+tom_preds = model.transform(tom_feat)                          # I apply trained model to new features
+orders = tom_preds.select("ingredient", col("prediction").alias("predicted_usage"))
+
+# 17. Load current on-hand inventory
+inv_df = (
+    spark.read
+         .option("inferSchema", True)
+         .option("header", True)
+         .csv("/data/current_inventory.csv")                   # I load inventory CSV with on_hand quantities
+)  # expected columns: ingredient (String), on_hand (Double)
+
+# 18. Compute recommended order quantities
+order_recs = (
+    orders.join(inv_df, on="ingredient", how="left")           # I bring in on-hand levels
+          .withColumn("order_qty",                             # I calculate positive shortage amounts
+                      when(col("predicted_usage") - col("on_hand") > 0,
+                           col("predicted_usage") - col("on_hand"))
+                      .otherwise(0))
+          .select("ingredient", "predicted_usage", "on_hand", "order_qty")
+)
+
+# 19. Write order recommendations to CSV for procurement
+order_recs.coalesce(1) \                                      # I write a single file for easy consumption
+          .write \
+          .option("header", True) \
+          .mode("overwrite") \
+          .csv("/outputs/inventory_order_recommendations")
+
+# 20. Stop Spark session when done
+spark.stop()                                                  # I shut down Spark to free cluster resources

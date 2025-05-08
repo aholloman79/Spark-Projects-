@@ -1,0 +1,41 @@
+from pyspark.sql import SparkSession                  # I import SparkSession so I can create and manage my Spark application
+
+# 1. I initialize my SparkSession, naming it for clarity in the Spark UI
+spark = SparkSession.builder \
+    .appName("BBQ2GO_WorkingWithDifferentTypes") \
+    .getOrCreate()
+
+# 2. I read in a daily sales CSV export for BBQ2GO to get started with mixed data types
+df = (
+    spark.read
+         .format("csv")                             # I specify CSV because my data is comma‑separated
+         .option("header", "true")                  # I tell Spark the first row has column names
+         .option("inferSchema", "true")             # I let Spark guess each column’s type (int, double, string, etc.)
+         .load("/data/bbq2go/daily-sales/2010-12-01.csv")  # I point to the exact file for December 1, 2010 sales
+)
+
+# 3. I print the inferred schema to understand what types Spark assigned to each column
+df.printSchema()
+
+# 4. For flexible ad-hoc SQL queries, I register this DataFrame as a temporary view
+df.createOrReplaceTempView("daily_sales")
+
+# 5. I take a peek at the first few rows to verify data loaded correctly
+df.show(10, False)                                 # I show 10 full rows without truncating any column values
+
+# 6. I cache the DataFrame because I plan to explore different data types repeatedly
+df.cache()                                        # I keep the DataFrame in memory for faster subsequent operations
+
+# 7. I count the total number of rows to gauge dataset size
+total_rows = df.count()
+print(f"I see {total_rows} sales records for 2010-12-01.")
+
+# 8. I sample a handful of rows to inspect null handling and string formats
+sample_rows = df.sample(False, 0.01, seed=42)      # I take a 1% random sample without replacement
+sample_rows.show(5, False)                        # I inspect 5 sample rows in full detail
+
+# 9. I unpersist the DataFrame when I'm done exploratory loading to free memory
+df.unpersist()
+
+# 10. I stop my Spark session now that initial setup is complete
+spark.stop()
